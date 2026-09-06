@@ -30,6 +30,8 @@ devspace agents run <profile-or-provider> --model <model> --effort <effort> "<br
 
 For read-only project inspection, explanation, research, or review, pass `--read-only` to `run` and to each read-only `continue` call. This selects read-only execution and the provider's configured `readOnlyDefaults` for model and effort. Explicit `--model` and `--effort` take precedence. Direct file reads do not invoke a subagent model.
 
+Model and effort defaults are resolved for each turn. A `continue` without `--read-only` uses the normal target defaults, so a previous read-only turn does not carry its lighter effort into development. Repeat explicit model or effort options on follow-up turns when you want to keep those overrides.
+
 ```bash
 devspace agents run codex --read-only "Explain this project without modifying files" --json
 ```

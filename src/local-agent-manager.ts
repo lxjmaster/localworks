@@ -153,7 +153,7 @@ export class LocalAgentManager {
         model: input.model,
         effort: input.effort,
         writeMode: input.writeMode,
-      }, input.workspaceId);
+      }, input.workspaceId, target);
     });
   }
 
@@ -173,7 +173,10 @@ export class LocalAgentManager {
       yield* manager.profileForRecordResult(record, profiles);
       yield* manager.providerEnabledResult(record.provider, record.profileName, "continue");
       yield* manager.driverResult(record.provider, "continue", agentId);
-      return manager.begin(record, prompt, overrides, scope.workspaceId);
+      const target = resolveLocalAgentTarget(
+        record.profileName, profiles, undefined, undefined, manager.subagents.providers,
+      );
+      return manager.begin(record, prompt, overrides, scope.workspaceId, target);
     });
   }
 
@@ -235,6 +238,7 @@ export class LocalAgentManager {
     prompt: string,
     overrides: RunOverrides,
     workspaceId?: string,
+    defaults?: { model?: string; effort?: string },
   ): BetterResult<LocalAgentRecord, AgentConflictError | AgentStoreError> {
     if (this.activeTurns.has(record.id)) {
       return Result.err(new AgentConflictError({
@@ -247,13 +251,14 @@ export class LocalAgentManager {
     }
 
     const providerConfig = this.subagents.providers.find((provider) => provider.id === record.provider);
-    if ((overrides.writeMode ?? providerConfig?.writeMode) === "read_only") {
-      overrides = {
-        ...overrides,
-        model: overrides.model ?? providerConfig?.readOnlyDefaults?.model,
-        effort: overrides.effort ?? providerConfig?.readOnlyDefaults?.effort,
-      };
-    }
+    const readOnlyDefaults = (overrides.writeMode ?? providerConfig?.writeMode) === "read_only"
+      ? providerConfig?.readOnlyDefaults : undefined;
+    // Resolve defaults for this turn, rather than inheriting a previous read-only turn.
+    overrides = {
+      ...overrides,
+      model: overrides.model ?? readOnlyDefaults?.model ?? defaults?.model,
+      effort: overrides.effort ?? readOnlyDefaults?.effort ?? defaults?.effort,
+    };
     const updated = this.store.updateResult(record.id, {
       status: "running",
       model: overrides.model ?? record.model,

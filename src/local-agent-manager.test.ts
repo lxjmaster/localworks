@@ -267,6 +267,23 @@ assert.equal(runtimes.get(readonlyAgent.id)!.inputs[0]!.writeMode, "read_only");
 assert.equal(runtimes.get(readonlyAgent.id)!.inputs[0]!.effort, "low");
 assert.equal(runtimes.get(first.id)!.inputs.at(-1)!.effort, "high");
 
+unwrap(await manager.continue(readonlyAgent.id, "implement the fix", {}, scope));
+await waitFor(() => getRecord(readonlyAgent.id).status === "idle");
+const developmentInput = runtimes.get(readonlyAgent.id)!.inputs.at(-1)!;
+assert.equal(developmentInput.writeMode, "full_access");
+assert.equal(developmentInput.model, "gpt-default");
+assert.equal(developmentInput.effort, "medium");
+assert.equal(developmentInput.effortOverrideRequested, true);
+assert.equal(getRecord(readonlyAgent.id).effort, "medium");
+
+unwrap(await manager.continue(readonlyAgent.id, "review the fix", { writeMode: "read_only" }, scope));
+await waitFor(() => getRecord(readonlyAgent.id).status === "idle");
+assert.equal(runtimes.get(readonlyAgent.id)!.inputs.at(-1)!.effort, "low");
+
+unwrap(await manager.continue(readonlyAgent.id, "implement with explicit effort", { effort: "high" }, scope));
+await waitFor(() => getRecord(readonlyAgent.id).status === "idle");
+assert.equal(runtimes.get(readonlyAgent.id)!.inputs.at(-1)!.effort, "high");
+
 const second = unwrap(await manager.start({
   target: "reviewer",
   prompt: "second agent",
