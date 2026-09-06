@@ -22,6 +22,8 @@ DevSpace is a self-hosted MCP server that lets ChatGPT read, edit, search, and r
 
 The same `/mcp` endpoint serves the 2026-07-28 per-request protocol and automatically supports older 2025-era clients through stateless compatibility handling. There is no protocol mode to configure.
 
+Managed subagents now default to serial execution, reuse explicit task identities and provider threads, and coordinate checkout/build-resource ownership with host commands and edits. The native `agent_task` tool provides low-noise observation and Codex usage metadata without nested shell polling. See [Codex efficiency and execution coordination](docs/configuration.md#codex-efficiency-and-execution-coordination) for scope, compatibility and rollout limits, and the [implementation record](docs/codex-efficiency-implementation.md) for actual verification.
+
 ## Sponsors and Special Thanks
 <!-- 
 

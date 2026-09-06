@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { Result, type Result as BetterResult } from "better-result";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
-import { AgentStoreError, isProgrammerDefect } from "./local-agent-errors.js";
+import { AgentConflictError, AgentStoreError, isProgrammerDefect } from "./local-agent-errors.js";
+import { recordAgentUsage, readAgentUsage, type AgentUsageObservation } from "./agent-usage.js";
 
 export type LocalAgentStatus = "starting" | "running" | "idle" | "error" | "stopped";
 
@@ -64,9 +65,15 @@ interface LocalAgentRow {
 export class LocalAgentStore {
   private readonly database: DatabaseHandle;
 
-  constructor(stateDir: string) {
+  constructor(readonly stateDir: string) {
     this.database = openDatabase(stateDir);
   }
+
+  recordUsageResult(agentId: string, usage: AgentUsageObservation): BetterResult<void, AgentStoreError> {
+    return storeResult("usage", () => recordAgentUsage(this.database.sqlite, agentId, usage));
+  }
+
+  usage(agentId: string) { return readAgentUsage(this.database.sqlite, agentId); }
 
   list(scope: LocalAgentListScope = {}): LocalAgentRecord[] {
     let rows: LocalAgentRow[];
@@ -155,6 +162,34 @@ export class LocalAgentStore {
 
   createResult(input: CreateLocalAgentRecordInput): BetterResult<LocalAgentRecord, AgentStoreError> {
     return storeResult("create", () => this.create(input));
+  }
+
+  createTaskResult(input: CreateLocalAgentRecordInput, task?: { key: string; hash: string; canonicalRoot: string }):
+    BetterResult<{ record: LocalAgentRecord; reused: boolean }, AgentStoreError | AgentConflictError> {
+    try {
+      return Result.ok(this.database.sqlite.transaction(() => {
+        if (task) {
+          const existing = this.database.sqlite.prepare(`select agent_id, request_hash from agent_task_keys
+            where workspace_root = ? and workspace_scope = ? and target = ? and task_key = ?`)
+            .get(task.canonicalRoot, input.workspaceId ?? "", input.profileName, task.key) as { agent_id: string; request_hash: string } | undefined;
+          if (existing) {
+            if (existing.request_hash !== task.hash) throw new AgentConflictError({ code: "AGENT_CONFLICT", agentId: existing.agent_id,
+              operation: "task_identity", retryable: false,
+              message: `Task key already belongs to ${existing.agent_id}. Use continue for related follow-up work; do not overwrite or replay the original request.` });
+            const record = this.getById(existing.agent_id);
+            if (!record) throw new Error("Task identity references a missing agent.");
+            return { record, reused: true };
+          }
+        }
+        const record = this.create(input);
+        if (task) this.database.sqlite.prepare(`insert into agent_task_keys
+          (workspace_root, workspace_scope, target, task_key, request_hash, agent_id) values (?, ?, ?, ?, ?, ?)`)
+          .run(task.canonicalRoot, input.workspaceId ?? "", input.profileName, task.key, task.hash, record.id);
+        return { record, reused: false };
+      }).immediate());
+    } catch (error) {
+      return Result.err(AgentConflictError.is(error) ? error : new AgentStoreError("task_identity", error));
+    }
   }
 
   getById(id: string): LocalAgentRecord | undefined {

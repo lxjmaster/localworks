@@ -124,3 +124,36 @@ export type WorkspaceConversationBindingRow = typeof workspaceConversationBindin
 export type NewWorkspaceConversationBindingRow = typeof workspaceConversationBindings.$inferInsert;
 export type LocalAgentSessionRow = typeof localAgentSessions.$inferSelect;
 export type NewLocalAgentSessionRow = typeof localAgentSessions.$inferInsert;
+
+export const executionClaims = sqliteTable("execution_claims", {
+  id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
+  ownerPid: integer("owner_pid").notNull(),
+  kind: text("kind").notNull(),
+  checkoutRoot: text("checkout_root").notNull(),
+  agentId: text("agent_id"),
+  resources: text("resources").notNull(),
+  acquiredAt: text("acquired_at").notNull(),
+});
+
+export const agentTaskKeys = sqliteTable("agent_task_keys", {
+  workspaceRoot: text("workspace_root").notNull(),
+  workspaceScope: text("workspace_scope").notNull(),
+  target: text("target").notNull(),
+  taskKey: text("task_key").notNull(),
+  requestHash: text("request_hash").notNull(),
+  agentId: text("agent_id").notNull().references(() => localAgentSessions.id),
+}, (table) => [primaryKey({ columns: [table.workspaceRoot, table.workspaceScope, table.target, table.taskKey] })]);
+
+export const agentUsageSnapshots = sqliteTable("agent_usage_snapshots", {
+  agentId: text("agent_id").notNull().references(() => localAgentSessions.id),
+  threadId: text("thread_id").notNull(),
+  turnId: text("turn_id").notNull(),
+  totalTokens: integer("total_tokens").notNull(),
+  totals: text("totals").notNull(),
+  lastRequest: text("last_request"),
+  baseline: text("baseline"),
+  baselineKind: text("baseline_kind").notNull(),
+  observedAt: text("observed_at").notNull(),
+  providerVersion: text("provider_version"),
+}, (table) => [primaryKey({ columns: [table.agentId, table.threadId, table.turnId] })]);

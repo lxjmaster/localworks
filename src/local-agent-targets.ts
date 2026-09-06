@@ -12,6 +12,7 @@ export interface ParsedLocalAgentRunArgs {
   model?: string;
   effort?: string;
   writeMode?: "read_only";
+  taskKey?: string;
 }
 
 export interface ParsedLocalAgentContinueArgs {
@@ -42,7 +43,7 @@ export type LocalAgentTarget =
 export function parseLocalAgentRunArgs(args: string[]): ParsedLocalAgentRunArgs {
   const parsed = parseAgentPromptArgs(
     args,
-    'Usage: devspace agents run <profile-or-provider> [--read-only] [--model <model>] [--effort <level>] "<prompt>"',
+    'Usage: devspace agents run <profile-or-provider> [--task-key <key>] [--read-only] [--model <model>] [--effort <level>] "<prompt>"',
   );
   return parsed;
 }
@@ -52,6 +53,7 @@ export function parseLocalAgentContinueArgs(args: string[]): ParsedLocalAgentCon
     args,
     'Usage: devspace agents continue <id> [--read-only] [--model <model>] [--effort <level>] "<prompt>"',
   );
+  if (parsed.taskKey) throw new Error("--task-key is for an initial run; continue already identifies the existing agent.");
   return { agentId: parsed.target, prompt: parsed.prompt, model: parsed.model, effort: parsed.effort, ...(parsed.writeMode ? { writeMode: parsed.writeMode } : {}) };
 }
 
@@ -67,6 +69,7 @@ function parseAgentPromptArgs(
   let model: string | undefined;
   let effort: string | undefined;
   let writeMode: "read_only" | undefined;
+  let taskKey: string | undefined;
   const promptParts: string[] = [];
   let optionsEnded = false;
   for (let index = 0; index < rest.length; index += 1) {
@@ -81,6 +84,11 @@ function parseAgentPromptArgs(
     }
     if (part === "--read-only") {
       writeMode = "read_only";
+      continue;
+    }
+    if (part === "--task-key" || part?.startsWith("--task-key=")) {
+      taskKey = parseOptionValue(part === "--task-key" ? rest[++index] : part.slice("--task-key=".length), "--task-key");
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(taskKey)) throw new Error("Invalid task key.");
       continue;
     }
     if (part === "--model") {
@@ -116,7 +124,7 @@ function parseAgentPromptArgs(
     throw new Error(usage);
   }
 
-  return { target, prompt, model, effort, ...(writeMode ? { writeMode } : {}) };
+  return { target, prompt, model, effort, ...(writeMode ? { writeMode } : {}), ...(taskKey ? { taskKey } : {}) };
 }
 
 function parseOptionValue(value: string | undefined, option: string): string {

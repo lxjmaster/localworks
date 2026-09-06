@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import { registerAgentTaskTool } from "./agent-task.js";
 import {
   editFileTool,
   runShellTool,
@@ -28,10 +29,11 @@ export function claudeInstructions({
   agents,
   skills,
 }: ToolInstructionContext): string {
-  return `${agents}${skills}${CLAUDE_INSTRUCTIONS}`;
+  return `${agents}${skills}${CLAUDE_INSTRUCTIONS} Use agent_task for subagent control, not a shell wrapper. Continue the same agent for related work; managed commands and mutations serialize with agent turns in the same checkout.`;
 }
 
 export function registerClaudeTools(context: ToolRegistrationContext): void {
+  registerAgentTaskTool(context);
   registerClaudeMutationTools(context);
   registerShellTool(context);
 }
@@ -39,7 +41,7 @@ export function registerClaudeTools(context: ToolRegistrationContext): void {
 const CLAUDE_SHELL_DESCRIPTION = `Run a shell command with the local user's authority. Commands are not sandboxed; workspace validation only selects the initial working directory. Use this for file inspection, tests, builds, package scripts, and other commands.`;
 
 function registerClaudeMutationTools(context: ToolRegistrationContext): void {
-  const { server, config, workspaces } = context;
+  const { server, config, workspaces, processSessions } = context;
 
   server.registerTool(
     toolNames.write,
@@ -60,10 +62,10 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
-      const response = await writeFileTool(input, {
+      const response = await processSessions.mutate(workspace.root, () => writeFileTool(input, {
         cwd: workspace.root,
         root: workspace.root,
-      });
+      }));
 
       if (response.isError) {
         logFailedToolResponse(
@@ -128,10 +130,10 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
-      const response = await editFileTool(input, {
+      const response = await processSessions.mutate(workspace.root, () => editFileTool(input, {
         cwd: workspace.root,
         root: workspace.root,
-      });
+      }));
 
       if (response.isError) {
         logFailedToolResponse(
@@ -172,7 +174,7 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
 }
 
 function registerShellTool(context: ToolRegistrationContext): void {
-  const { server, config, workspaces } = context;
+  const { server, config, workspaces, processSessions } = context;
 
   server.registerTool(
     toolNames.shell,
@@ -207,10 +209,10 @@ function registerShellTool(context: ToolRegistrationContext): void {
         workspace,
         workingDirectory,
       );
-      const response = await runShellTool(input, {
+      const response = await processSessions.mutate(workspace.root, () => runShellTool(input, {
         cwd,
         root: workspace.root,
-      });
+      }));
 
       if (response.isError) {
         logFailedToolResponse(

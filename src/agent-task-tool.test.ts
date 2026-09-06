@@ -1,0 +1,85 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { Result } from "better-result";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { registerAgentTaskTool } from "./tool-surfaces/agent-task.js";
+import { ProcessSessionManager } from "./process-sessions.js";
+import { LocalAgentStore, type LocalAgentRecord } from "./local-agent-store.js";
+import { AgentScopeError } from "./local-agent-errors.js";
+import type { ServerConfig } from "./config.js";
+import type { WorkspaceRegistry } from "./workspaces.js";
+import type { StartLocalAgentInput } from "./local-agent-manager.js";
+import { decodeLocalAgentDaemonRequest, encodeLocalAgentDaemonRequest } from "./local-agent-daemon-protocol.js";
+import { LOCAL_AGENT_DAEMON_PROTOCOL_VERSION } from "./local-agent-daemon-lifecycle.js";
+import { parseLocalAgentRunArgs, parseLocalAgentContinueArgs } from "./local-agent-targets.js";
+
+test("native MCP control observes an occupied checkout without shell claims and deduplicates response delivery", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "devspace-native-task-"));
+  const processSessions = new ProcessSessionManager({ stateDir: root });
+  const store = new LocalAgentStore(root);
+  let record: LocalAgentRecord = store.create({ workspaceId: "workspace-1", workspaceRoot: root, profileName: "codex", provider: "codex" });
+  record = store.update(record.id, { status: "running" });
+  const claim = processSessions.executionCoordinator!.acquire({ workspaceRoot: root, kind: "agent", agentId: record.id });
+  const starts: StartLocalAgentInput[] = [];
+  let scoped = true;
+  const server = new McpServer({ name: "fixture", version: "1" });
+  registerAgentTaskTool({ server, processSessions,
+    config: { stateDir: root, subagents: { enabled: true, providers: [] } } as unknown as ServerConfig,
+    workspaces: { getWorkspace: (id: string) => {
+      assert.equal(id, "workspace-1"); return { id, root };
+    } } as unknown as WorkspaceRegistry,
+  }, {
+    start: async (input) => { starts.push(input); return Result.ok(record); },
+    continue: async (_id, _prompt, _overrides, scope) => { assert.equal(scope.workspaceRoot, root); return Result.ok(record); },
+    get: async (_id, scope) => {
+      assert.equal(scope.workspaceId, "workspace-1");
+      return scoped ? Result.ok(record) : Result.err(new AgentScopeError({ code: "WORKSPACE_MISMATCH", operation: "get", retryable: false, message: "scope rejected" }));
+    },
+    list: async () => Result.ok([record]),
+  });
+  const client = new Client({ name: "fixture-host", version: "1" });
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  t.after(async () => { claim.release(); await client.close(); await server.close(); processSessions.shutdown(); store.close(); rmSync(root, { recursive: true, force: true }); });
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  const call = async (args: Record<string, unknown>) => {
+    const response = await client.callTool({ name: "agent_task", arguments: { workspaceId: "workspace-1", ...args } });
+    const text = (response.content as Array<{ type: string; text: string }>)[0]!.text;
+    return { ...JSON.parse(text), isError: response.isError } as Record<string, unknown>;
+  };
+  const absent = await call({ action: "start", target: "codex", prompt: "work" });
+  assert.equal(absent.isError, true); assert.equal(starts.length, 0);
+  await call({ action: "start", target: "codex", prompt: "work", taskKey: "task-1", readOnly: true });
+  assert.equal(starts[0]?.taskKey, "task-1"); assert.equal(starts[0]?.writeMode, "read_only");
+  const initial = await call({ action: "observe", agentId: record.id, waitMs: 0 });
+  assert.equal(initial.status, "running");
+  const unchanged = await call({ action: "observe", agentId: record.id, waitMs: 0, knownRevision: initial.revision });
+  assert.equal(unchanged.unchanged, true);
+  record = { ...record, status: "idle", latestResponse: "completed evidence" };
+  const brief = await call({ action: "observe", agentId: record.id, waitMs: 0, knownRevision: initial.revision });
+  assert.equal(brief.responseAvailable, true); assert.equal(brief.response, undefined);
+  const expanded = await call({ action: "observe", agentId: record.id, includeResponse: true, waitMs: 0 });
+  assert.equal(expanded.response, "completed evidence");
+  const claims = await call({ action: "claims" });
+  assert.equal((claims.claims as unknown[]).length, 1);
+  const usage = await call({ action: "usage", agentId: record.id });
+  assert.equal(usage.status, "unknown");
+  scoped = false;
+  assert.equal((await call({ action: "usage", agentId: record.id })).isError, true);
+});
+
+test("initial task key survives CLI and daemon decoding; continue does not silently ignore it", () => {
+  const parsed = parseLocalAgentRunArgs(["codex", "--task-key=issue-17", "inspect"]);
+  assert.equal(parsed.taskKey, "issue-17");
+  assert.throws(() => parseLocalAgentContinueArgs(["agt_a", "--task-key", "wrong", "next"]));
+  const request = { requestId: "fixture", protocolVersion: LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
+    authToken: "synthetic-test-only", method: "agent.start" as const,
+    params: { target: "codex", prompt: "inspect", taskKey: parsed.taskKey, workspaceRoot: process.cwd() } };
+  const decoded = decodeLocalAgentDaemonRequest(JSON.parse(encodeLocalAgentDaemonRequest(request)));
+  assert.equal(decoded.method, "agent.start");
+  if (decoded.method === "agent.start") assert.equal(decoded.params.taskKey, "issue-17");
+});

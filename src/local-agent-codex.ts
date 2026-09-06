@@ -9,6 +9,7 @@ import {
   captureAgentProviderResult,
 } from "./local-agent-errors.js";
 import { removeDevspaceNodeModulesBinFromPath } from "./local-agent-path.js";
+import { parseCodexUsage } from "./agent-usage.js";
 import { terminateProcessTree } from "./process-platform.js";
 import type {
   LocalAgentDriver,
@@ -146,7 +147,13 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
         }
 
         await callbacks?.onSessionId?.(threadId);
-        const completed = await this.rpc.runTurn(threadId, turnParams(input, threadId));
+        const completed = await this.rpc.runTurn(threadId, turnParams(input, threadId), (value) => {
+          const usage = parseCodexUsage(value);
+          if (!usage || usage.threadId !== threadId) return;
+          // Telemetry failure must not cause paid work to be retried or crash the protocol loop.
+          try { callbacks?.onUsage?.({ ...usage, newThread: !input.providerSessionId, providerVersion: this.options.version }); }
+          catch { /* Missing telemetry remains unknown; it is never synthesized as zero. */ }
+        });
         const parsed = parseCompletedTurn(completed.event.params, completed.items);
         if (parsed.failure) {
           throw new AgentProviderExecutionError({
@@ -319,6 +326,8 @@ interface CodexTurnAccumulator {
   threadId: string;
   turnId?: string;
   items: unknown[];
+  pendingUsage: unknown[];
+  onUsage?: (value: unknown) => void;
   completed?: CodexEvent;
   resolve: (result: CodexTurnResult) => void;
   reject: (error: Error) => void;
@@ -359,7 +368,7 @@ class CodexAppServerRpc {
     this.write({ method, ...(params === undefined ? {} : { params }) });
   }
 
-  async runTurn(threadId: string, params: unknown): Promise<CodexTurnResult> {
+  async runTurn(threadId: string, params: unknown, onUsage?: (value: unknown) => void): Promise<CodexTurnResult> {
     if (this.fatalError) throw this.fatalError;
     if (this.turns.has(threadId)) throw new Error(`Codex thread ${threadId} already has an active turn.`);
     let resolveTurn!: (result: CodexTurnResult) => void;
@@ -371,6 +380,8 @@ class CodexAppServerRpc {
     const turn: CodexTurnAccumulator = {
       threadId,
       items: [],
+      pendingUsage: [],
+      onUsage,
       resolve: resolveTurn,
       reject: rejectTurn,
     };
@@ -378,6 +389,10 @@ class CodexAppServerRpc {
     try {
       const response = await this.request("turn/start", params);
       turn.turnId = readString(asRecord(response)?.turn, "id");
+      for (const usage of turn.pendingUsage) {
+        if (turn.turnId && asRecord(usage)?.turnId === turn.turnId) turn.onUsage?.(usage);
+      }
+      turn.pendingUsage = [];
       if (turn.completed) return { event: turn.completed, items: turn.items };
       return await completion;
     } finally {
@@ -430,6 +445,13 @@ class CodexAppServerRpc {
     const turn = this.findTurn(event);
     if (!turn) return;
     const params = asRecord(event.params);
+    if (event.method === "thread/tokenUsage/updated") {
+      if (!turn.turnId) {
+        turn.pendingUsage.push(event.params);
+        if (turn.pendingUsage.length > 32) turn.pendingUsage.shift();
+      } else if (params?.turnId === turn.turnId) turn.onUsage?.(event.params);
+      return;
+    }
     if (params?.item !== undefined) {
       turn.items.push(params.item);
       if (turn.items.length > MAX_TURN_ITEMS) turn.items.shift();
@@ -457,6 +479,9 @@ function threadParams(input: LocalAgentRunInput): Record<string, unknown> {
     cwd: input.workspaceRoot,
     approvalPolicy: "never",
     sandbox: sandboxFor(input.writeMode),
+    // The host owns delegation. A single managed turn must not silently fan out
+    // into additional paid contexts outside DevSpace's admission accounting.
+    config: { "features.multi_agent": false },
     ...(input.model ? { model: input.model } : {}),
   };
 }

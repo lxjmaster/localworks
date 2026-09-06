@@ -19,6 +19,8 @@ const providerSchema = z.object({
 export const subagentsConfigSchema = z.object({
   enabled: z.boolean(),
   providers: z.array(providerSchema),
+  maxConcurrentAgents: z.number().int().min(1).max(16).optional(),
+  sharedResources: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/)).max(16).optional(),
 }).strict().superRefine((value, context) => {
   const seen = new Set<LocalAgentProvider>();
   for (const [index, provider] of value.providers.entries()) {

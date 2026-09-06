@@ -37,6 +37,48 @@ const migrations: Migration[] = [
     name: "local-agent-effort-rename",
     up: migrateLocalAgentEffortRename,
   },
+  {
+    version: 7,
+    name: "execution-coordination",
+    up(sqlite) {
+      sqlite.exec(`create table if not exists execution_claims (
+        id text primary key,
+        owner_id text not null,
+        owner_pid integer not null,
+        kind text not null,
+        checkout_root text not null,
+        agent_id text,
+        resources text not null,
+        acquired_at text not null
+      );`);
+    },
+  },
+  {
+    version: 8,
+    name: "idempotent-agent-task-identity",
+    up(sqlite) {
+      sqlite.exec(`create table if not exists agent_task_keys (
+        workspace_root text not null, workspace_scope text not null,
+        target text not null, task_key text not null, request_hash text not null,
+        agent_id text not null references local_agent_sessions(id),
+        primary key (workspace_root, workspace_scope, target, task_key)
+      );`);
+    },
+  },
+  {
+    version: 9,
+    name: "provider-usage-snapshots",
+    up(sqlite) {
+      sqlite.exec(`create table if not exists agent_usage_snapshots (
+        agent_id text not null references local_agent_sessions(id),
+        thread_id text not null, turn_id text not null,
+        total_tokens integer not null, totals text not null, last_request text,
+        baseline text, baseline_kind text not null, observed_at text not null,
+        provider_version text,
+        primary key (agent_id, thread_id, turn_id)
+      );`);
+    },
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {

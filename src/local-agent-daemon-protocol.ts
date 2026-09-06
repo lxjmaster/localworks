@@ -251,6 +251,7 @@ function decodeStartInput(value: unknown): StartLocalAgentInput {
     model: optionalString(record?.model),
     effort: optionalString(record?.effort),
     writeMode: decodeWriteMode(record?.writeMode),
+    taskKey: optionalString(record?.taskKey),
   };
 }
 

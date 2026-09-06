@@ -1,6 +1,7 @@
 import type { Result } from "better-result";
 import type { AgentProviderError } from "./local-agent-errors.js";
 import type { LocalAgentProvider } from "./local-agent-profiles.js";
+import type { AgentUsageObservation } from "./agent-usage.js";
 
 export type LocalAgentWriteMode = "read_only" | "allowed" | "full_access";
 
@@ -23,6 +24,7 @@ export interface LocalAgentRunResult {
 }
 
 export interface LocalAgentRunCallbacks {
+  onUsage?: (observation: AgentUsageObservation) => void;
   /**
    * Called as soon as a provider creates or resolves a durable continuation
    * identity. The callback is awaited before the provider starts work that

@@ -222,6 +222,19 @@
             ],
             "additionalProperties": false
           }
+        },
+        "maxConcurrentAgents": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "sharedResources": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+          }
         }
       },
       "required": [

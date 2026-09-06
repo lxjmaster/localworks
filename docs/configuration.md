@@ -83,8 +83,8 @@ rejected so spelling mistakes cannot silently alter behavior.
 
 | Value | Tool surface |
 | --- | --- |
-| `codex` | Default. `open_workspace`, `read`, `apply_patch`, `exec_command`, `write_stdin`, and `show_changes`. |
-| `claude` | `open_workspace`, `read`, `write`, `edit`, `bash`, and `show_changes`. |
+| `codex` | Default. `open_workspace`, `read`, `agent_task`, `apply_patch`, `exec_command`, `write_stdin`, and `show_changes`. |
+| `claude` | `open_workspace`, `read`, `agent_task`, `write`, `edit`, `bash`, and `show_changes`. |
 
 The dedicated MCP tools `grep`, `glob`, and `ls` are not exposed. Each mode uses
 its shell tool with programs such as `rg`, `find`, and `ls` when it needs those
@@ -134,6 +134,18 @@ Provider executable discovery remains process-scoped. The supported overrides
 are `CODEX_COMMAND`, `CODEX_HOME`, `CLAUDE_COMMAND`, `CURSOR_COMMAND`,
 `COPILOT_COMMAND`, `GROK_COMMAND`, and `GROK_AGENT_PROFILE`. DevSpace does not
 persist provider credentials.
+
+### Codex efficiency and execution coordination
+
+The default is **one active managed agent globally**, and always one active operation per real checkout. The optional `subagents.maxConcurrentAgents` accepts 1–16; increasing it permits independent checkouts/worktrees, not competing writers in the same checkout. Read-only agent turns are also serialized by default because separate contexts still incur provider work. Prefer `agent_task` with `action=continue` for related work rather than starting one agent per file.
+
+`subagents.sharedResources` optionally declares up to 16 exclusive resource keys for agent turns. Managed `exec_command` accepts matching `resources` for shared build outputs or devices across worktrees. Every participating process must use the same DevSpace state directory and the same key. This is cooperative admission, **not an OS sandbox**; arbitrary terminals, externally daemonized child processes, and uncoordinated tools are outside this guarantee.
+
+Managed file writes, patches and shell commands exclude agent turns in the checkout. Use the native `agent_task` control plane to start/observe workers without acquiring a shell claim. Shell-wrapped `devspace agents run` is deliberately rejected when its parent shell holds that checkout; direct terminal CLI remains supported. A native start requires a stable `taskKey`. Identical starts reuse the stored agent without executing another turn; changed instructions use `continue`. The terminal equivalent is `devspace agents run codex --task-key issue-17 "bounded task" --json`. A denied initial task remains stopped and can be explicitly continued after the conflict is resolved; retries do not automatically replay it.
+
+`agent_task` provides `start`, `continue`, `observe`, `list`, `claims`, and `usage`. Observe uses bounded local waiting (`waitMs`, maximum 25 seconds), `knownRevision` to avoid duplicate delivery, and `includeResponse=true` to retrieve the full response. Usage is provider-reported metadata with unknown values preserved; cumulative totals are never summed. Cached input and reasoning output are breakdowns, not extra charges. Managed Codex threads pass `features.multi_agent=false` on start/resume so that native child-agent fanout does not bypass the host's admission policy. Global Codex configuration is not rewritten.
+
+Claims survive owner interruption and are never stolen merely because time elapsed or a PID disappeared: children or external side effects may still exist. `action=claims` shows scoped reconciliation information. Automatic orphan recovery and non-idempotent command replay are not implemented. Daemon protocol version 4 prevents an older daemon from silently ignoring these guarantees. Use the normal controlled upgrade/reconnect flow after active work has settled; do not replace a running server's build directory mid-task. See [implementation and verification](codex-efficiency-implementation.md).
 
 ## Native artifact download
 

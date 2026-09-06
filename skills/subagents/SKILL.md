@@ -5,7 +5,15 @@ description: Delegate focused coding, research, review, or verification work to 
 
 # DevSpace subagents
 
-Use the DevSpace CLI through the shell or process tool. Run commands from the project the subagent should work on.
+When the host exposes `agent_task`, use that native control-plane tool instead of wrapping the CLI in a shell. Managed shell commands hold the checkout's execution claim; a shell-wrapped `agents run` cannot transfer that claim to a daemon safely. The CLI remains available from a direct terminal. Never work around an execution conflict by changing directories or disabling a guard.
+
+## Concurrency and context policy
+
+Default to **one coherent worker and one active turn**. Continue its existing agent ID for related implementation, tests, and fixes. Do not split a coupled change by file or start multiple workers just to shorten elapsed time: each new provider thread has its own context setup, and shared files/build outputs can race. Keep independent high-risk review when useful, but run it after the writer has finished or against an explicit immutable snapshot.
+
+The default global agent limit is one. Raising `subagents.maxConcurrentAgents` only allows independent real checkouts/worktrees; the same checkout remains exclusive, including read-only agents. Shared build outputs/devices must use matching resource keys (`subagents.sharedResources` for agents and `resources` for managed commands). This is cooperative scheduling, not an OS sandbox and not control of arbitrary external terminals.
+
+For native `start`, choose one stable `taskKey` for the initial task. An identical repeated start returns the existing agent without another provider turn; changed instructions require `continue`. Conflicts occur before provider execution and return the owning agent/claim. Observe with `knownRevision` and bounded `waitMs`; request `includeResponse` only when the completed response is needed. Do not spend model turns polling an unchanged task.
 
 ## Choose a target
 

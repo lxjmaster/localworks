@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
+import { ExecutionCoordinator, type ExecutionClaim } from "./execution-coordinator.js";
 
 const DEFAULT_EXEC_YIELD_MS = 10_000;
 const DEFAULT_INTERACTIVE_YIELD_MS = 250;
@@ -22,6 +23,7 @@ export interface StartCommandInput {
   rows?: number;
   yieldTimeMs?: number;
   maxOutputTokens?: number;
+  resources?: string[];
 }
 
 export interface WriteStdinInput {
@@ -64,11 +66,13 @@ interface ProcessSession {
   exitPromise: Promise<void>;
   resolveExit: () => void;
   cleanupTimer?: NodeJS.Timeout;
+  executionClaim?: ExecutionClaim;
 }
 
 interface ProcessSessionManagerOptions {
   maxBufferCharacters?: number;
   completedSessionTtlMs?: number;
+  stateDir?: string;
 }
 
 function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
@@ -216,14 +220,36 @@ export class ProcessSessionManager {
   private readonly maxBufferCharacters: number;
   private readonly completedSessionTtlMs: number;
   private nextSessionId = 1;
+  readonly executionCoordinator?: ExecutionCoordinator;
+  private readonly claims = new Set<ExecutionClaim>();
+  private shuttingDown = false;
 
   constructor(options: ProcessSessionManagerOptions = {}) {
     this.maxBufferCharacters = options.maxBufferCharacters ?? DEFAULT_BUFFER_CHARACTERS;
     this.completedSessionTtlMs = options.completedSessionTtlMs ?? COMPLETED_SESSION_TTL_MS;
+    if (options.stateDir) this.executionCoordinator = new ExecutionCoordinator(options.stateDir);
+  }
+
+  async mutate<T>(workspaceRoot: string, operation: () => Promise<T>): Promise<T> {
+    if (this.shuttingDown) throw new Error("Execution manager is shutting down.");
+    const claim = this.executionCoordinator?.acquire({ workspaceRoot, kind: "mutation" });
+    if (claim) this.claims.add(claim);
+    try { return await operation(); } finally { this.releaseClaim(claim); }
+  }
+
+  private releaseClaim(claim?: ExecutionClaim): void {
+    if (claim) { claim.release(); this.claims.delete(claim); }
+    if (this.shuttingDown && this.claims.size === 0) this.executionCoordinator?.close();
   }
 
   async start(input: StartCommandInput): Promise<ProcessSnapshot> {
+    if (this.shuttingDown) throw new Error("Execution manager is shutting down.");
+    const yieldTimeMs = boundedInteger(input.yieldTimeMs, DEFAULT_EXEC_YIELD_MS, MAX_COMMAND_YIELD_MS);
+    boundedInteger(input.maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
     const session = this.createSession(input);
+    session.executionClaim = this.executionCoordinator?.acquire({ workspaceRoot: input.workspaceRoot ?? input.cwd,
+      kind: "command", resources: input.resources });
+    if (session.executionClaim) this.claims.add(session.executionClaim);
     this.sessions.set(session.id, session);
 
     try {
@@ -231,10 +257,10 @@ export class ProcessSessionManager {
       else this.startPipe(session, input);
     } catch (error) {
       this.sessions.delete(session.id);
+      this.releaseClaim(session.executionClaim);
       throw error;
     }
 
-    const yieldTimeMs = boundedInteger(input.yieldTimeMs, DEFAULT_EXEC_YIELD_MS, MAX_COMMAND_YIELD_MS);
     await this.waitForExit(session, yieldTimeMs);
 
     const snapshot = this.consume(session, input.maxOutputTokens);
@@ -282,11 +308,13 @@ export class ProcessSessionManager {
   }
 
   shutdown(): void {
+    this.shuttingDown = true;
     for (const session of this.sessions.values()) {
       if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
       if (session.running) session.process?.kill("SIGTERM");
     }
     this.sessions.clear();
+    if (this.claims.size === 0) this.executionCoordinator?.close();
   }
 
   private async waitForExit(session: ProcessSession, yieldTimeMs: number): Promise<void> {
@@ -389,6 +417,7 @@ export class ProcessSessionManager {
     session.running = false;
     session.exitCode = exitCode;
     session.signal = signal;
+    this.releaseClaim(session.executionClaim);
     session.resolveExit();
     session.cleanupTimer = setTimeout(
       () => this.sessions.delete(session.id),

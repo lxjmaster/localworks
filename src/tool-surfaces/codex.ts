@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import { registerAgentTaskTool } from "./agent-task.js";
 import { applyPatch } from "../apply-patch.js";
 import type { ProcessSnapshot } from "../process-sessions.js";
 import {
@@ -17,7 +18,7 @@ import {
 
 type CodexRegistration = (context: ToolRegistrationContext) => void;
 
-const CODEX_INSTRUCTIONS = `Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Commands run with the local user's authority and are not sandboxed; workspace validation only selects their initial working directory. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.`;
+const CODEX_INSTRUCTIONS = `Use ${toolNames.read} for direct file reads, apply_patch for file modifications, exec_command for commands, and write_stdin for running processes. Use agent_task (not shell-wrapped agents commands) to start/continue/observe subagents. Prefer continuing one agent for related work. Managed commands, mutations and agent turns exclude each other in the same checkout; do not bypass a conflict using a different path. Declare shared build/device resources across worktrees. Commands still have the local user's authority, not an OS sandbox. Follow workspace instructions and applicable skills.`;
 
 export function codexInstructions(): string {
   return CODEX_INSTRUCTIONS;
@@ -30,6 +31,7 @@ export function registerCodexTools(context: ToolRegistrationContext): void {
 }
 
 const CODEX_REGISTRATIONS: readonly CodexRegistration[] = [
+  registerAgentTaskTool,
   registerApplyPatchTool,
   registerCodexProcessTools,
 ];
@@ -74,7 +76,7 @@ function processToolResponse(snapshot: ProcessSnapshot) {
 }
 
 function registerApplyPatchTool(context: ToolRegistrationContext): void {
-  const { server, config, workspaces } = context;
+  const { server, config, workspaces, processSessions } = context;
 
   server.registerTool(
     "apply_patch",
@@ -111,7 +113,7 @@ function registerApplyPatchTool(context: ToolRegistrationContext): void {
         startedAt,
         async () => {
           const workspace = workspaces.getWorkspace(workspaceId);
-          return applyPatch(workspace.root, patch);
+          return processSessions.mutate(workspace.root, () => applyPatch(workspace.root, patch));
         },
       );
       const paths = applied.files.map((file) => file.path).join(", ");
@@ -143,6 +145,8 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
+        resources: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/)).max(16).optional()
+          .describe("Additional exclusive resource keys for shared build outputs/devices. Checkout exclusion is automatic."),
         tty: z
           .boolean()
           .optional()
@@ -198,6 +202,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       workingDirectory,
       yieldTimeMs,
       maxOutputTokens,
+      resources,
     }) => {
       const startedAt = performance.now();
       const snapshot = await runLoggedToolOperation(
@@ -226,6 +231,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
             rows,
             yieldTimeMs,
             maxOutputTokens,
+            resources,
           });
         },
       );

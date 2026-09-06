@@ -1,4 +1,6 @@
 import { resolve } from "node:path";
+import { ExecutionCoordinator, ExecutionConflictError, canonicalExecutionRoot, type ExecutionClaim } from "./execution-coordinator.js";
+import { createHash } from "node:crypto";
 import { Result, type Result as BetterResult } from "better-result";
 import {
   AgentConflictError,
@@ -44,6 +46,7 @@ export interface StartLocalAgentInput {
   model?: string;
   effort?: string;
   writeMode?: LocalAgentWriteMode;
+  taskKey?: string;
 }
 
 export interface RunOverrides {
@@ -87,11 +90,13 @@ export class LocalAgentManager {
   private readonly logger?: LocalAgentManagerLogger;
   private readonly subagents: SubagentsConfig;
   private readonly activeTurns = new Map<string, Promise<void>>();
+  private readonly execution: ExecutionCoordinator;
   private accepting = true;
   private closePromise?: Promise<void>;
 
   constructor(options: LocalAgentManagerOptions) {
     this.store = options.store;
+    this.execution = new ExecutionCoordinator(options.store.stateDir);
     for (const driver of options.drivers) this.drivers.set(driver.provider, driver);
     this.pool = options.pool;
     this.loadProfiles = options.loadProfiles;
@@ -141,19 +146,35 @@ export class LocalAgentManager {
       }
       yield* manager.providerEnabledResult(target.provider, target.name, "start");
       yield* manager.driverResult(target.provider, "start");
-      const record = yield* manager.store.createResult({
+      if (input.taskKey !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.taskKey)) {
+        return Result.err(new AgentTargetError({ code: "TARGET_RESOLUTION_FAILED", target: input.target,
+          retryable: false, message: "Invalid task key." }));
+      }
+      const task = input.taskKey ? { key: input.taskKey, canonicalRoot: canonicalExecutionRoot(workspaceRoot),
+        hash: createHash("sha256").update(JSON.stringify([input.prompt, input.target, input.writeMode, input.model, input.effort])).digest("hex") } : undefined;
+      const created = yield* manager.store.createTaskResult({
         workspaceId: input.workspaceId,
         workspaceRoot,
         profileName: target.name,
         provider: target.provider,
         model: target.model,
         effort: target.effort,
-      });
-      return manager.begin(record, input.prompt, {
+      }, task);
+      const record = created.record;
+      if (created.reused) {
+        yield* manager.agentWorkspaceResult(record, { workspaceId: input.workspaceId, workspaceRoot }, "start");
+        return Result.ok(record);
+      }
+      const started = manager.begin(record, input.prompt, {
         model: input.model,
         effort: input.effort,
         writeMode: input.writeMode,
       }, input.workspaceId, target);
+      if (started.isErr()) manager.store.updateResult(record.id, {
+        status: "stopped", error: started.error.message,
+        errorCode: started.error.code, errorRetryable: started.error.retryable,
+      });
+      return started;
     });
   }
 
@@ -216,6 +237,7 @@ export class LocalAgentManager {
           this.log("warn", "local_agent_close_failed", { error: errorMessage(result.reason) });
         }
       }
+      this.execution.close();
       this.store.close();
     })();
     return this.closePromise;
@@ -250,6 +272,18 @@ export class LocalAgentManager {
       }));
     }
 
+    let claim: ExecutionClaim;
+    try {
+      claim = this.execution.acquire({ workspaceRoot: record.workspaceRoot, kind: "agent", agentId: record.id,
+        resources: this.subagents.sharedResources, maxConcurrentAgents: this.subagents.maxConcurrentAgents ?? 1 });
+    } catch (error) {
+      if (error instanceof ExecutionConflictError) return Result.err(new AgentConflictError({
+        code: "AGENT_CONFLICT", agentId: error.agentId, operation: "admission", retryable: true, message: error.message,
+      }));
+      return Result.err(new AgentStoreError("admission", error,
+        "Unable to establish an exclusive execution claim; provider was not invoked."));
+    }
+
     const providerConfig = this.subagents.providers.find((provider) => provider.id === record.provider);
     const readOnlyDefaults = (overrides.writeMode ?? providerConfig?.writeMode) === "read_only"
       ? providerConfig?.readOnlyDefaults : undefined;
@@ -268,12 +302,12 @@ export class LocalAgentManager {
       errorCode: undefined,
       errorRetryable: undefined,
     });
-    if (updated.isErr()) return updated;
+    if (updated.isErr()) { claim.release(); return updated; }
     // Defer invocation until after the tracking entry is visible. This keeps
     // cleanup correct even if runTurn later gains a synchronous completion path.
     const turn = Promise.resolve().then(() => (
       this.runTurn(updated.value, prompt, overrides, workspaceId)
-    ));
+    )).finally(() => claim.release());
     this.activeTurns.set(record.id, turn);
     void turn.catch(() => undefined);
     return updated;
@@ -332,6 +366,10 @@ export class LocalAgentManager {
         agentDir: this.agentDir,
       };
       const callbacks: LocalAgentRunCallbacks = {
+        onUsage: (usage) => {
+          const saved = this.store.recordUsageResult(record.id, usage);
+          if (saved.isErr()) this.log("warn", "agent_usage_persistence_failed", { agentId: record.id, errorCode: saved.error.code });
+        },
         onSessionId: (providerSessionId) => {
           const current = this.store.getByIdResult(record.id);
           if (current.isErr()) throw current.error;

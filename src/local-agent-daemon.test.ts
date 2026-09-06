@@ -301,10 +301,10 @@ const upgradeClient = new LocalAgentClient({
   },
 });
 try {
-  assert.equal(unwrap(await upgradeClient.ensureReady()).protocolVersion, 3);
+  assert.equal(unwrap(await upgradeClient.ensureReady()).protocolVersion, LOCAL_AGENT_DAEMON_PROTOCOL_VERSION);
   assert.equal(replacementSpawns, 1);
   assert.equal(spawnedBeforeLegacyLockReleased, false);
-  assert.deepEqual(legacyMethods.slice(0, 3), ["hello:3", "hello:1", "daemon.stop:1"]);
+  assert.deepEqual(legacyMethods.slice(0, 3), [`hello:${LOCAL_AGENT_DAEMON_PROTOCOL_VERSION}`, "hello:1", "daemon.stop:1"]);
 } finally {
   legacyLock.release();
   await replacementDaemon.close();
@@ -397,11 +397,11 @@ const timeoutServer = createNetServer((socket) => {
     if (request.method !== "hello") return;
     socket.end(encodeLocalAgentDaemonResponse({
       requestId: request.requestId,
-      protocolVersion: 3,
+      protocolVersion: LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
       ok: true,
       result: {
         state: "ready",
-        protocolVersion: 3,
+        protocolVersion: LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
         pid: process.pid,
         endpoint: timeoutPaths.endpoint,
         startedAt: "now",
@@ -443,7 +443,7 @@ const invalidServer = createNetServer((socket) => {
     if (!buffer.includes("\n")) return;
     socket.end(encodeLocalAgentDaemonResponse({
       requestId: "wrong_request_id",
-      protocolVersion: 3,
+      protocolVersion: LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
       ok: true,
       result: {},
     }));
@@ -497,7 +497,7 @@ try {
 
   const unauthorized = await sendRawRequest(socketDaemon.paths.endpoint, JSON.stringify({
     requestId: "unauthorized",
-    protocolVersion: 3,
+    protocolVersion: LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
     authToken: "wrong-secret",
     method: "hello",
     params: {},

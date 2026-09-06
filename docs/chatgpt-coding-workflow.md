@@ -141,11 +141,13 @@ Skill paths may be outside the workspace. DevSpace only permits reading:
 
 Set `skills.enabled` to `false` to hide skills from workspace output. Enable
 Subagents and choose providers through `devspace init` or the persisted provider
-configuration. The bundled `subagents` skill teaches the minimal
-`devspace agents targets`, `devspace agents ls`, `devspace agents run`,
-`devspace agents continue`, and `devspace agents show` workflow. The catalog
-comes from `open_workspace`; `devspace agents ls` lists existing subagent
-sessions for that workspace.
+configuration. The bundled `subagents` skill prefers the native `agent_task`
+control plane when available. Start with a stable task key, continue the same
+agent for related work, and observe using bounded waits and known revisions.
+Managed shell commands now hold checkout claims, so do not wrap agent lifecycle
+commands in `exec_command` or `bash`. Direct terminal CLI remains available.
+The catalog comes from `open_workspace`; native `list` reports current sessions
+and concurrency policy. See [coordination and migration notes](configuration.md#codex-efficiency-and-execution-coordination).
 
 ## Tool Names
 
@@ -153,6 +155,7 @@ The Claude surface exposes these tool names:
 
 - `open_workspace`
 - `read`
+- `agent_task`
 - `write`
 - `edit`
 - `bash`
@@ -162,6 +165,7 @@ DevSpace uses the Codex-style surface by default. It exposes:
 
 - `open_workspace`
 - `read`
+- `agent_task`
 - `apply_patch`
 - `exec_command`
 - `write_stdin`

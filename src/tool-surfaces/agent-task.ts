@@ -1,0 +1,84 @@
+import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import * as z from "zod/v4";
+import { createLocalAgentClient, type LocalAgentClient } from "../local-agent-client.js";
+import { presentAgentObservation, presentAgentReceipt, presentAgentSummary } from "../local-agent-presentation.js";
+import { LocalAgentStore } from "../local-agent-store.js";
+import type { ToolRegistrationContext } from "./types.js";
+
+type AgentClient = Pick<LocalAgentClient, "start" | "continue" | "get" | "list">;
+
+/** A control-plane call must not acquire the shell/checkout claim it is observing. */
+export function registerAgentTaskTool(context: ToolRegistrationContext, client?: AgentClient): void {
+  const { server, config, workspaces, processSessions } = context;
+  const agents = client ?? createLocalAgentClient(config);
+  server.registerTool("agent_task", {
+    title: "Manage a bounded agent task",
+    description: "Start, continue, observe or list bounded subagents without a shell wrapper. Prefer continue with the same agentId for related work. Default admission is serial; conflicts happen before model execution. Observe waits locally and can return only changed state. Use claims to inspect an interrupted execution, never blindly replay it.",
+    inputSchema: {
+      workspaceId: z.string(),
+      action: z.enum(["start", "continue", "observe", "list", "claims", "usage"]),
+      target: z.string().optional(),
+      agentId: z.string().optional(),
+      prompt: z.string().min(1).optional(),
+      taskKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/).optional()
+        .describe("Stable identity for one initial task. Repeating the same start returns its existing agent without a new model call; use continue for new instructions."),
+      readOnly: z.boolean().optional(),
+      model: z.string().optional(),
+      effort: z.string().optional(),
+      waitMs: z.number().int().min(0).max(25_000).optional(),
+      knownRevision: z.string().optional(),
+      includeResponse: z.boolean().optional(),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  }, async (input, extra) => {
+    const workspace = workspaces.getWorkspace(input.workspaceId);
+    const scope = { workspaceId: workspace.id, workspaceRoot: workspace.root };
+    const reply = (value: unknown, isError = false) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(value) }], isError,
+    });
+    if (input.action === "claims") return reply({ claims: processSessions.executionCoordinator?.inspect(workspace.root) ?? [],
+      coordinationEnabled: Boolean(processSessions.executionCoordinator) });
+    if (input.action === "list") {
+      const records = await agents.list(scope);
+      if (records.isErr()) return reply({ code: records.error.code, message: records.error.message }, true);
+      return reply({ agents: records.value.map(presentAgentSummary), policy: {
+        maxConcurrentAgents: config.subagents.maxConcurrentAgents ?? 1, perCheckout: 1,
+        sharedResources: config.subagents.sharedResources ?? [],
+      } });
+    }
+    if (input.action === "usage") {
+      if (!input.agentId) return reply({ code: "INVALID_TASK", message: "usage needs agentId." }, true);
+      const authorized = await agents.get(input.agentId, scope);
+      if (authorized.isErr()) return reply({ code: authorized.error.code, message: authorized.error.message }, true);
+      const store = new LocalAgentStore(config.stateDir);
+      try { return reply(store.usage(authorized.value.id)); } finally { store.close(); }
+    }
+    const overrides = { model: input.model, effort: input.effort, writeMode: input.readOnly ? "read_only" as const : undefined };
+    if (input.action === "start" || input.action === "continue") {
+      if (!input.prompt || (input.action === "start" ? (!input.target || !input.taskKey) : !input.agentId)) {
+        return reply({ code: "INVALID_TASK", message: "start needs target, stable taskKey and prompt; continue needs agentId and prompt." }, true);
+      }
+      const result = input.action === "start"
+        ? await agents.start({ ...scope, ...overrides, target: input.target!, prompt: input.prompt, taskKey: input.taskKey })
+        : await agents.continue(input.agentId!, input.prompt, overrides, scope);
+      if (result.isErr()) return reply({ code: result.error.code, message: result.error.message, retryable: result.error.retryable }, true);
+      return reply(presentAgentReceipt(result.value));
+    }
+    if (!input.agentId) return reply({ code: "INVALID_TASK", message: "observe needs agentId." }, true);
+    const deadline = Date.now() + (input.waitMs ?? 20_000);
+    for (;;) {
+      const found = await agents.get(input.agentId, scope);
+      if (found.isErr()) return reply({ code: found.error.code, message: found.error.message }, true);
+      const record = found.value;
+      const revision = createHash("sha256").update(JSON.stringify([record.updatedAt, record.status, record.latestResponse, record.error])).digest("hex");
+      const running = record.status === "running" || record.status === "starting";
+      if (!running || Date.now() >= deadline || (input.knownRevision && revision !== input.knownRevision)) {
+        if (revision === input.knownRevision) return reply({ id: record.id, status: presentAgentReceipt(record).status, revision, unchanged: true });
+        const observation = presentAgentObservation(input.includeResponse ? record : { ...record, latestResponse: undefined });
+        return reply({ ...observation, revision, responseAvailable: Boolean(record.latestResponse) });
+      }
+      await delay(Math.min(500, Math.max(0, deadline - Date.now())), undefined, { signal: extra.signal });
+    }
+  });
+}
