@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync, existsSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
+import { canonicalPathIdentity } from "./roots.js";
 
 export type SourceAccess = "read" | "write";
 
@@ -49,13 +50,12 @@ export function canonicalExecutionRoot(path: string): string {
   const real = realpathSync(resolve(path));
   let cursor = real;
   for (;;) {
-    if (existsSync(resolve(cursor, ".git"))) return normalize(cursor);
+    if (existsSync(resolve(cursor, ".git"))) return canonicalPathIdentity(cursor);
     const parent = dirname(cursor);
-    if (parent === cursor) return normalize(real);
+    if (parent === cursor) return canonicalPathIdentity(real);
     cursor = parent;
   }
 }
-function normalize(path: string): string { return process.platform === "win32" ? path.toLowerCase() : path; }
 function contains(parent: string, child: string): boolean {
   const rest = relative(parent, child);
   return rest === "" || (!isAbsolute(rest) && rest !== ".." && !rest.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`));

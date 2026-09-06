@@ -1,5 +1,26 @@
 # Configuration Reference
 
+## WSL project paths from a Windows server
+
+Add individual UNC project directories to `workspaces.allowedRoots`, for example
+`\\wsl.localhost\Ubuntu\home\owner\project\OpenViking`. WSL filesystem components
+are case-sensitive: `OpenViking` must not become `openviking`. DevSpace preserves
+that spelling in canonical checkout identities and checks WSL allowed-root
+containment case-sensitively. The `wsl$` and `wsl.localhost` host aliases and
+distribution-name casing resolve to the same identity. Ordinary Windows path
+identity behavior is unchanged. Execution claims remain conservative about
+case-only overlap; this change does not release or rewrite existing claims.
+
+Project display names can differ from directory names. Registration in the
+DevSpace ledger does not import a Codex application's project/thread history.
+UNC access does not switch command or provider execution to Linux: a Windows
+server still uses its configured Windows provider and shell. Linux-specific
+commands require an explicit WSL invocation. This is not a shell sandbox.
+
+Regression coverage includes WSL aliases, extended UNC spelling, case-sensitive
+allowed-root rejection, Windows identity compatibility, project-name persistence,
+and existing checkout/resource cross-process coordination tests.
+
 DevSpace stores durable settings in `~/.devspace/config.jsonc`. The file accepts
 comments and trailing commas and is validated before the server starts. Editor
 completion is provided by the versioned [JSON Schema](../schema/v1/devspace.schema.json),

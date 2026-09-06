@@ -903,7 +903,7 @@ export function createServer(
   });
 
   const projectConsole = createProjectConsoleRouter(config, { assetDirectory: uiBuildDirectory() });
-  app.get("/console", (req, res) => res.redirect(303, `/console/${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`));
+  app.get(/^\/console$/, (req, res) => res.redirect(303, `/console/${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`));
   app.use("/console", projectConsole.router);
 
   app.all("/mcp", async (req, res) => {

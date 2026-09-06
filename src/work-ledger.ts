@@ -81,11 +81,13 @@ export class WorkLedger {
   close(): void { this.database.close(); }
   get db() { return this.database.sqlite; }
 
-  project(root: string): ProjectRow {
+  project(root: string, name?: string): ProjectRow {
+    if (name !== undefined && (!name.trim() || name.length > 200)) throw new Error("Project name must contain 1–200 characters.");
     const canonical = canonicalExecutionRoot(root);
     const projectId = `prj_${digest(canonical).slice(0, 24)}`;
     this.db.prepare("insert or ignore into console_projects(id, root, name, created_at) values (?,?,?,?)")
       .run(projectId, canonical, basename(root), now());
+    if (name !== undefined) this.db.prepare("update console_projects set name = ? where id = ?").run(name.trim(), projectId);
     return this.getProject(projectId);
   }
   getProject(projectId: string): ProjectRow {

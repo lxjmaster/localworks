@@ -29,6 +29,17 @@ function fixture(t: TestContext) {
   return { root, project, state, store, ledger, agent, begin, make, usage, finishExecution, finish };
 }
 
+test("explicit project names preserve identity and survive ordinary registration", (t) => {
+  const f = fixture(t);
+  const original = f.ledger.project(f.project);
+  const named = f.ledger.project(f.project, "LanggraphAgent");
+  assert.equal(named.id, original.id);
+  assert.equal(named.root, original.root);
+  assert.equal(f.ledger.project(f.project).name, "LanggraphAgent");
+  assert.throws(() => f.ledger.project(f.project, " "));
+  assert.equal(f.ledger.project(f.project).name, "LanggraphAgent");
+});
+
 test("a host-only run has an explicit zero receipt and idempotent final acceptance", (t) => {
   const f = fixture(t); const run = f.begin("host");
   assert.equal(f.begin("host").id, run.id);

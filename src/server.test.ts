@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig, type ServerConfig, type ToolMode } from "./config.js";
@@ -20,6 +22,34 @@ import { WorkspaceRegistry } from "./workspaces.js";
 import { writeTestDevspaceConfig } from "./test-support/config.test.js";
 
 const execFileAsync = promisify(execFile);
+
+test("console redirect preserves queries and does not redirect its own destination", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-console-redirect-"));
+  const config = loadConfig(writeTestDevspaceConfig(join(root, "config"), {
+    storage: { stateDir: join(root, "state") },
+    workspaces: { allowedRoots: [root], worktreeRoot: join(root, "worktrees") },
+    subagents: { enabled: false, providers: [] },
+  }));
+  const server = createServer({ ...config, console: { enabled: false, allowRemote: false, sessionTtlSeconds: 300 } });
+  const http = server.app.listen(0, "127.0.0.1");
+  t.after(async () => {
+    await new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve()));
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await once(http, "listening");
+  const base = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
+  for (const query of ["", "?project=fixture&next=%2Fconsole%2F"]) {
+    const redirect = await fetch(`${base}/console${query}`, { redirect: "manual" });
+    assert.equal(redirect.status, 303);
+    assert.equal(redirect.headers.get("location"), `/console/${query}`);
+    await redirect.text();
+    const entry = await fetch(`${base}/console/${query}`, { redirect: "manual" });
+    assert.equal(entry.status, 404);
+    assert.equal(entry.headers.get("location"), null);
+    await entry.text();
+  }
+});
 
 test("tool modes expose the expected host-facing tool surface", async (t) => {
   const cases: Array<{
