@@ -2,25 +2,30 @@
 
 This guide covers ChatGPT and Coding Agents using DevSpace with local projects.
 
+For this fork, start with the [Chinese default README](../README.md),
+[English README](../README.en.md), or the [ChatGPT Server URL / official Tunnel walkthrough](chatgpt-mcp-setup.zh-CN.md).
+The commands below run this source checkout after installation/build, not an upstream npm distribution.
+
 ## Requirements
 
 - Node `>=22.19 <27`
 - npm
 - Git
 - Bash, including Git Bash or WSL on Windows
-- a public HTTPS URL that forwards to the local DevSpace server, only when
-  ChatGPT will connect
+- a working ChatGPT MCP transport: your controlled HTTPS endpoint or an authorized
+  OpenAI Secure MCP Tunnel, plus reachable OAuth endpoints for this server
 
-DevSpace does not create the public tunnel for you. ChatGPT users can use
+DevSpace does not create a tunnel for you. For the Server URL route, ChatGPT users can use
 Cloudflare Tunnel, ngrok, Pinggy, Tailscale Funnel, or their own HTTPS reverse
-proxy.
+proxy. Official Tunnel is a separate transport with its own permissions and OAuth
+constraints; follow the linked walkthrough rather than treating it as a public URL.
 
 ## Install And Configure
 
 Run:
 
 ```bash
-npx @waishnav/devspace init
+node bin/devspace.js init
 ```
 
 The setup flow asks one question at a time.
@@ -64,13 +69,16 @@ If you selected Coding Agents, setup prints:
 npx skills add Waishnav/devspace --skill subagents --global
 ```
 
-The Skills CLI asks which installed Coding Agents should receive the skill.
+That printed command targets the upstream skill, not this fork's changed workflow.
+For this fork, review the checked-in `skills/subagents/SKILL.md` and use an explicitly
+authorized installation method for your chosen agent; do not overwrite existing skills
+merely to follow an inherited example. The Skills CLI asks which installed Coding Agents should receive the skill.
 The skill uses `devspace agents targets`, `run`, `continue`, `show`, and `ls`.
 These commands do not require `devspace serve`.
 
 ### Connect ChatGPT
 
-Setup only asks for a public URL if you selected ChatGPT. Start your tunnel or
+The initializer's public-URL question applies when you selected ChatGPT. For the Server URL path, start your tunnel or
 reverse proxy first and point it at:
 
 ```text
@@ -110,14 +118,14 @@ A Coding Agents-only setup skips this section.
 Run:
 
 ```bash
-npx @waishnav/devspace serve
+node bin/devspace.js serve
 ```
 
 If your tunnel URL changes, update the persisted value before starting:
 
 ```bash
-npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
-npx @waishnav/devspace serve
+node bin/devspace.js config set publicBaseUrl https://taskquay.example.com
+node bin/devspace.js serve
 ```
 
 ## Approve The Client
@@ -139,7 +147,7 @@ Keep `auth.json` private.
 Run:
 
 ```bash
-npx @waishnav/devspace doctor
+node bin/devspace.js doctor
 ```
 
 The doctor command reports the resolved config, Node version, Node ABI, platform,

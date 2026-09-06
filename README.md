@@ -1,55 +1,69 @@
 # TaskQuay
 
-**Visible tasks. Accountable local execution.**
+**让懂你需求的网页 GPT，真正带着本地 Coding Agent 干活。**
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [GitHub](https://github.com/wrfgup/taskquay) · [Security model](docs/security.md) · [MIT license](LICENSE)
+[简体中文](README.md) · [English](README.en.md) · [GitHub](https://github.com/wrfgup/taskquay) · [接入教程](docs/chatgpt-mcp-setup.zh-CN.md) · [MIT 许可证](LICENSE)
 
-TaskQuay is a self-hosted execution and project-management layer for MCP-capable AI hosts. Let ChatGPT or another host inspect your workspace directly, delegate bounded work to Codex when useful, and return a result backed by changes, checks, and a task-level usage receipt.
+TaskQuay 是一个自托管的 MCP 本地执行与项目任务管理工具。你继续在熟悉的 ChatGPT 对话里讨论方案、下发任务、查看结果；主控直接读取工作区，在确有必要时调度本地 Codex，并带回变更、验收证据和 Token 回执。
 
-It is an **independent fork of [Waishnav/DevSpace](https://github.com/Waishnav/devspace)**, not an official OpenAI, Anthropic, or upstream DevSpace product. The upstream implementation and its MIT copyright notice are retained. This fork focuses on host-first context gathering, controlled agent concurrency, reusable sessions, observable work, and honest Codex usage reporting.
+本项目是 **[Waishnav/DevSpace](https://github.com/Waishnav/devspace) 的独立二开分支**。保留上游 MIT 版权声明，重点补齐主控直读、受控并行、会话复用、任务台与用量统计；不是 OpenAI、Anthropic 或上游 DevSpace 的官方产品。
 
-> **Early-stage, source-first project.** The public-facing name is TaskQuay. The CLI command, configuration directory, MCP identifiers, and existing UI labels remain `devspace` for compatibility. The upstream npm package does **not** necessarily include this fork's changes. The source repository is [wrfgup/taskquay](https://github.com/wrfgup/taskquay); no TaskQuay npm release is implied.
+> **早期项目，建议从本仓库源码运行。** 对外名称为 TaskQuay；CLI、配置目录、MCP 标识及部分界面继续保留 `devspace`，避免破坏现有安装。上游 npm 包不等于本分支，目前不宣称已经发布 TaskQuay npm 包。
 
-## Why this fork?
+## 你是否也遇到过这些烦恼？
 
-Remote coding is more than letting a model run a terminal command. A useful workflow should answer: Who started this task? Is something still writing or building? Which conversation already understands the problem? Did verification finish? How much Codex usage actually belongs to this run?
+### 1. 网页 GPT 已经理解了方案，本地 Codex 却还要从头解释
 
-TaskQuay puts those questions into explicit tools and local state instead of leaving them entirely in a long chat transcript.
+你在网页端和 GPT 讨论了很久，它已经了解这段对话里的目标、偏好和限制，也给出了满意的方案。但要落地时，还得把方案搬到 Codex，重新交代背景，再把 Codex 的追问搬回来。每次修改都在两个窗口之间当“传话筒”。
 
-| Capability | What it does |
-| --- | --- |
-| **Host-first inspection** | `read` and `workspace_context` let the host inspect selected files, search text, and collect versioned references without starting a Codex inference request. |
-| **Bounded delegation** | Verified read-only workers can share source access within configured limits. Writers and unknown-effect commands remain exclusive; shared build outputs and devices use resource claims. |
-| **Session reuse** | Related work can continue an existing thread. Work-item identity, context affinity, and request idempotency are separate; independent review can deliberately use fresh context. |
-| **Project console** | `/console/` groups tasks, origins, execution state, acceptance evidence, Codex sessions, usage, and unresolved claims by project. |
-| **Usage receipts** | Work completion returns provider-reported Codex usage with a completeness label. Missing telemetry is not silently presented as zero. |
-| **Scoped chat housekeeping** | Archive/restore workflows preview an exact project-scoped set, require confirmation, and skip conversations whose ownership or activity cannot be verified. |
+**TaskQuay 把讨论、执行和验收接在一起。** 主控先直接看项目，再将必要上下文与明确任务交给 Codex，跟进修正，最后把结果带回对话。你不用再手工搬运每一版方案。
 
-The goal is to avoid unnecessary Codex contexts, repeated investigation, and conflicting work—not to maximize the number of agents running at once. No fixed token-saving percentage is promised.
+它减少重复解释和无效确认，不取消必要授权。ChatGPT 的长期记忆、个性化是否可用取决于当前模式与账号设置，也不会自动完整继承给 Codex；重要约束应明确写进任务或项目规则。[官方设置说明](https://help.openai.com/en/articles/11487775-connectors-in-chatgpt)
 
-## How it fits together
+### 2. 手机连不上本地 Codex？不必把 Remote 当作唯一入口
+
+出门后想让家里电脑继续干活，却卡在 Codex Remote 的连接或切换会话上？TaskQuay 提供另一条路径：
 
 ```text
-You
-  └─ MCP host: planning, direct inspection, decisions, acceptance
-       └─ TaskQuay / compatible devspace tools
-            ├─ Workspace reads, edits, commands and evidence
-            ├─ Task ledger, concurrency and resource claims
-            ├─ Bounded Codex sessions when delegation is needed
-            └─ Project console and completion receipts
+ChatGPT 网页对话 → 已授权的 TaskQuay MCP → 本地工作区 / Coding Agent
 ```
 
-The host remains the orchestrator. TaskQuay is not an opaque autonomous manager, a replacement for Codex, or a hosted model service.
+**接入完成后，直接在支持该连接的 GPT 网页对话里下发任务，不需要先建立一个单独的 Codex Remote 会话。** 本地电脑、TaskQuay 服务和网络入口仍须在线；它不能让关机、休眠或断网的电脑自动恢复。
 
-**Local execution does not mean that all data stays on your machine.** File contents returned over MCP go to your selected host; delegated prompts and tool results may go to the model provider. Choose authorized projects and follow the host/provider's current privacy settings and terms.
+手机使用也要分清客户端：[当前官方 MCP FAQ](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt) 仍标注 web-only，不能承诺原生手机 App 可用。手机浏览器只有在实际能看到、选择并调用自定义连接时才能使用；切换“桌面版网站”不等于保证支持。建议先在桌面网页完成配置和验收。
 
-## Run from this source tree
+### 3. 多个任务抢着写代码、抢着编译？把协调交给工具
 
-Requirements are defined in `package.json`: Node.js `>=22.19 <27`, Git, and the pinned `pnpm@11.25.0`. Install and authenticate a supported Codex CLI separately when you need Codex delegation. Direct workspace tools do not require a Codex inference call.
+同一个项目开了多个 Coding Agent，对方还没改完接口，这边已经开始编译；两边覆盖同一文件，或者争抢同一个 APK 输出目录、模拟器和数据库——并行不仅没变快，还制造了返工。
 
-Clone **this fork**, then run:
+**TaskQuay 将受管操作的并发变成明确规则：** 纯只读可以限量并行，写入独占，构建与设备按资源协调，超额任务在本地排队，不让模型一边消耗 Token 一边等待。
 
-The package currently has `private: true` as a guard against accidental npm publication under the upstream namespace. This does not prevent publishing the reviewed source repository under MIT.
+默认最多两个活跃代理，同一源码最多两个经过权限确认的读者。保护范围是接入同一协调机制的任务；外部编辑器、另开的未纳管终端不在锁内，跨 worktree 的共享输出也必须声明相同资源键。不是靠一句“只读”就放任所有任务同时运行，也不宣称一把锁能消灭所有并发问题。
+
+### 4. 新任务来了，不知道该复用哪个对话、怎样少花 Token？
+
+同一工程里已经有好几个 Codex 会话，有的熟悉后端，有的刚修过移动端。继续一个无关的长会话浪费上下文；每次新开又要从头理解。选择会话本身成了你的工作。
+
+**TaskQuay 根据明确的工作项、问题域和角色匹配可复用的空闲会话，主控也可以直接继续指定代理。** 相关任务沿用上下文，繁忙会话不偷偷克隆；无关任务和独立验收仍可使用新上下文。
+
+它帮助减少重复探索，不会扫描并接管你全部私人 Codex 聊天，也不承诺自动找到数学意义上“最省”的线程。会话复用不等于缓存必定命中，实际效果以任务用量回执和验收质量为准。
+
+## 核心能力
+
+| 能力 | 实际作用 |
+| --- | --- |
+| **主控先读** | `read`、`workspace_context` 直接查看指定文件、搜索文本、获取版本引用，不先调用 Codex 做全仓背景调查。 |
+| **有界委派** | 只读共享、写入独占、资源锁和调用前排队，控制竞争与重复上下文。 |
+| **会话复用** | 工作目标、上下文亲和与请求幂等分别管理，相关工作优先继续。 |
+| **项目任务台** | `/console/` 查看来源、执行、验收、Codex 会话、用量及待核对占用。 |
+| **完成回执** | 明确区分完整、部分、未知、未调用，缺少统计不能装成零。 |
+| **项目级聊天整理** | 归档／恢复先预览、再确认；活动任务、外部续写和归属不足的会话跳过。 |
+
+主控仍然负责统筹，TaskQuay 是执行与证据层，不是黑盒自主总管。本地运行也不等于内容不离开电脑：返回的文件会进入你选择的主控，委派材料可能发送给模型提供方。不要连接未经授权的项目。
+
+## 从源码安装
+
+环境以 `package.json` 为准：Node.js `>=22.19 <27`、Git、`pnpm@11.25.0`。使用 Codex 委派时，另行安装并登录兼容的 Codex CLI；Windows 建议准备 Git Bash，并用 `doctor` 检查本机工具。直接读取工作区不需要发起 Codex 推理。
 
 ```sh
 git clone https://github.com/wrfgup/taskquay.git
@@ -62,76 +76,91 @@ node bin/devspace.js doctor
 node bin/devspace.js serve
 ```
 
-Use the initializer to choose permitted roots, provider configuration, and your connection settings. Keep the generated owner authorization secret private. To avoid modifying an existing installation, test in a separate environment and back up its configuration and state first.
+初始化时选择使用位置、授权项目目录、可用 provider 和接入地址。首次用户先阅读下面两种接法，再填写 `publicBaseUrl`。授权目录保持最小范围，owner 口令自行保管，不要贴入聊天、Issue 或截图。
 
-**Do not run a clean/rebuild over a service that is actively executing work.** `pnpm build` replaces `dist`; upgrades need a controlled stop, build, restart, and host-tool refresh after active operations settle.
+`package.json` 的 `private: true` 用于阻止误用上游 namespace 发布 npm 包，不影响源码开源。已有安装先备份配置和状态；**不要在正在执行任务的服务上直接运行 `pnpm build`**，它会替换 `dist`。本 README 不要求修改当前运行实例来试验教程。
 
-### Connect an MCP host
+## 创建 ChatGPT 插件 / 应用并连接 MCP
 
-The default local MCP endpoint is:
+**接入信息核对日期：2026-09-06。** 这里的“插件／应用”指开发者模式下的 MCP 连接，不是自定义 GPT 中的 OpenAPI Actions。
 
-```text
-http://127.0.0.1:7676/mcp
+OpenAI 当前开发者文档的入口为 **设置 → Security and login（安全与登录）→ Developer mode**，然后进入 [ChatGPT Plugins](https://chatgpt.com/plugins)，点 **+** 创建。部分账号仍显示 **设置 → Apps／应用 → Advanced settings／高级设置**，组织账号还可能需要管理员开启权限。[官方创建步骤](https://developers.openai.com/plugins/deploy/connect-chatgpt)
+
+不同官方页面对部分套餐能力的描述并不完全一致。请以账号实际显示的入口、管理员授权和真实工具调用结果为准，不能仅凭拥有 Plus／Pro 就保证所有读写功能都可用。[开发者指南](https://developers.openai.com/api/docs/guides/developer-mode) · [帮助中心](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)
+
+| 方式 | 在 ChatGPT 填什么 | 适用条件 |
+| --- | --- | --- |
+| **服务器 URL** | 自己控制的 `https://域名/mcp` | 有 HTTPS 入口，TaskQuay 的 MCP 与 OAuth 路由都可达。 |
+| **OpenAI 官方 Tunnel** | 选择 Tunnel，并选择或填写实际 `tunnel_id` | 有隧道权限、runtime key、在线的 `tunnel-client`，并单独打通 OAuth。 |
+
+### 方式 A：通过服务器 URL 接入
+
+**第一步：让 HTTPS 入口转发到正确的电脑。** TaskQuay 默认监听 `http://127.0.0.1:7676`。可以使用自己控制的反向代理或 HTTPS 隧道；转发目标必须是项目实际所在、运行 TaskQuay 的机器。云服务器上的 `127.0.0.1` 不是你家里的电脑。
+
+转发范围不能只有 `/mcp`：本项目还需要 OAuth 发现、注册、授权和令牌路由。建议按根路径正确代理 TaskQuay 服务，同时保留 `/console/` 的默认远程访问限制。[完整路由与网络说明](docs/chatgpt-mcp-setup.zh-CN.md#server-url)
+
+**第二步：设置站点根地址并启动服务。** 将示例替换为你自己的 HTTPS 地址，`publicBaseUrl` 不带 `/mcp`：
+
+```sh
+node bin/devspace.js config set publicBaseUrl https://taskquay.example.com
+node bin/devspace.js serve
 ```
 
-A remotely hosted client generally needs a reachable HTTPS endpoint, for example:
+**第三步：在 ChatGPT 创建连接。** 名称填写 `TaskQuay`，连接方式选择 **Server URL／服务器 URL**，填写 `https://taskquay.example.com/mcp`，身份验证选择 **OAuth**。本项目使用动态客户端注册；界面允许时不要手填固定 Client ID／Client Secret，更不要把 owner 口令填进这些字段。不要为了连通而选择“无身份验证”。
 
-```text
-https://your-controlled-host.example/mcp
-```
+**第四步：完成 owner 授权并验收。** 在 TaskQuay 弹出的授权页面核对应用、范围和资源地址，再输入自己的 owner 口令。返回 ChatGPT 后检查工具列表；新对话中从工具／插件菜单选中 TaskQuay，先测试只读调用。后续需要新的工具操作时再次选择或明确提及它，不假设每条消息都会自动带上连接。
 
-Provide the base origin without `/mcp` during setup. Configure your tunnel/reverse proxy and approve the connection using the owner authorization flow. TaskQuay does not manage or own your tunnel.
+### 方式 B：通过 OpenAI 官方 Secure MCP Tunnel 接入
 
-The same `/mcp` endpoint retains upstream support for the 2026-07-28 per-request protocol and stateless compatibility with older 2025-era clients. There is no separate protocol mode to configure.
+这种方式由本机客户端主动连接 OpenAI，将请求转发给私有 MCP，不需要为 MCP 开放公网入站端口。它不是 Codex Remote，也不是第三方临时 HTTPS 隧道。[官方说明](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-Custom MCP availability depends on your host, account, workspace settings, and policies. Consult the [current ChatGPT developer-mode documentation](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt); this project does not grant product access or bypass provider controls.
+1. 在 [Platform → Organization → Tunnels](https://platform.openai.com/settings/organization/tunnels) 创建或选择隧道，关联实际使用的 Platform organization 与 ChatGPT workspace。创建／管理需要 **Tunnels Read + Manage**；运行或选择使用需要 **Read + Use**。ChatGPT 开发者权限是另一项权限。
+2. 从 [OpenAI 官方发布页](https://github.com/openai/tunnel-client/releases/latest) 或 Tunnels 页面下载匹配系统的 `tunnel-client`，先运行 `tunnel-client help quickstart`。准备真实 `tunnel_id` 和有权限的 runtime API key，保存在本机受控环境，不写进仓库。
+3. 建立 HTTP 配置，将 MCP 目标指向 `http://127.0.0.1:7676/mcp`，选用适合 OAuth/DCR 的配置，执行 `doctor` 并保持 `run` 在线。[完整命令、凭据区分和 OAuth 配置](docs/chatgpt-mcp-setup.zh-CN.md#official-tunnel)
+4. 在 ChatGPT 创建应用时，Connection 选择 **Tunnel**，选择已有隧道或填入该 `tunnel_id`，继续完成授权和工具发现。不是在 Server URL 中填写 localhost，也不是在这里填写 API key。
 
-### Open the project console
+**本项目的重要条件：隧道只解决 MCP 传输，不自动代理浏览器 OAuth 登录页面。** TaskQuay 自带 OAuth 服务；授权页、注册和 token 交换仍须按调用方与官方隧道支持的路由打通。只启动 `tunnel-client` 不代表手机或云端就能访问电脑的 `/authorize`。没有独立打通 OAuth 时，优先使用方式 A，不要关闭鉴权。[官方 OAuth 路由说明](https://github.com/openai/tunnel-client/blob/master/docs/connectors.md)
 
-```text
-http://127.0.0.1:7676/console/
-```
+本次文档修改没有重新验证“TaskQuay 全私网 OAuth + 官方 Tunnel”的真实完整流程；该方式应在自己的组织与账号中完成下方验收再投入使用。官方隧道用于私有／开发者模式连接，不替代公开插件商店要求的 HTTPS 服务，也不提供免费模型额度。
 
-The console uses the owner secret with its own authenticated browser session and is local-only by default. Remote console access is a separate explicit HTTPS opt-in, not a consequence of exposing `/mcp`. See the [console guide](docs/project-console.md) and [configuration reference](docs/configuration.md).
+### 第一次调用怎么验收？
 
-## A workflow worth keeping
+先在已启用 TaskQuay 的对话中发送：
 
-Start one top-level work run with `work_task`, then propagate its `workRunId` through inspection, edits, commands, and agent calls. The host should first gather relevant context directly. Delegate only work that benefits from a worker, give it clear boundaries and versioned evidence, and continue the relevant session for follow-up changes and tests.
+> 使用 TaskQuay 打开我已授权的 `<项目绝对路径>`，先建立工作记录。直接读取项目说明并告诉我目录结构，不修改文件、不启动 Codex、不部署。完成后返回工作回执和 Codex 用量。
 
-Use independent review when the risk justifies it. Finish only after child operations stop and actual acceptance evidence has been checked. A model's final message is not proof that a build, deployment, or GUI verification succeeded.
+确认主控确实调用了工具、返回的路径正确，`/console/` 能看到对应任务；未调用 Codex 的这次检查应显示零。之后再明确授权一个小范围修改任务，验证变化、测试和真实 Codex 消耗。工具更新后刷新连接元数据；浏览器直接 GET `/mcp` 的响应不能替代 MCP 初始化、鉴权和工具调用测试。
 
-An example request to your connected host:
+本项目保留上游 MCP 2026-07-28 与旧版 2025-era 客户端的自动协议兼容，不需要手动配置“协议模式”。排错、持续运行和最小测试清单见[完整接入教程](docs/chatgpt-mcp-setup.zh-CN.md)。
 
-> Open my approved project. Begin a work record, inspect the relevant files directly, and propose the smallest safe fix. Use Codex only where useful; reuse its session for follow-ups. Run the appropriate checks, review the final diff, and return the task's Codex usage and completeness with the result. Do not deploy or publish without separate authorization.
+## 日常任务怎么下达？
 
-See [host-first workflows](docs/host-first-readonly-workflows.md) for exact tool contracts and concurrency behavior.
+> 使用 TaskQuay 处理这个项目。先读取相关实现、确认目标与限制。主控能直接完成的调查不要重复委派；确实需要 Codex 时复用相关会话。对同一源码的写入和共享编译资源保持互斥。逐步实施、运行检查并审查最终 diff，返回结果、验收范围和本次 Codex Token 回执。部署、公开发布和破坏性操作需要另行确认。
 
-## Understand the usage numbers
+主控用 `work_task` 建立工作，持续传递 `workRunId`；子操作结束、实际证据检查完毕后再结算。你不用每次手工挑一个新 Codex 窗口，更不必把每条构建日志来回复制。平台仍可能要求确认高风险工具动作；本项目不会绕过这些控制。
 
-| Label | Meaning |
+## 项目任务台与用量
+
+管理台默认地址是 `http://127.0.0.1:7676/console/`，使用 owner 口令建立独立浏览器会话。远程访问需要单独开启，不因 MCP 接通而自动开放。[任务台说明](docs/project-console.md)
+
+| 统计状态 | 含义 |
 | --- | --- |
-| **Complete** | The mapped execution boundary and provider usage observations are available. |
-| **Partial** | Some usage is recorded, but the task still has measurement gaps. |
-| **Unavailable** | Evidence is insufficient for an accurate number; this is not zero. |
-| **Not used** | No managed Codex inference was started for the measured work. |
+| **完整** | 受管执行边界及 provider 用量事件齐全。 |
+| **部分** | 有已记录用量，但仍存在缺口。 |
+| **未知** | 证据不足，不能给准确总量；不是零。 |
+| **未调用** | 对应工作没有启动受管 Codex 推理。 |
 
-Cache input and reasoning output are breakdowns, not extra amounts to add to totals. Session history, manual Codex activity, and separate external model commands must not be assigned to a later task merely because they share a directory. Provider token observations are not your subscription balance or an invoice. Reusing a session does not guarantee a cache hit.
+缓存输入、推理输出不能在总量上再次相加。历史线程消耗、手工续写和外部模型命令不应误归到新任务。只有主控直读／确定性执行而未发起 Codex 推理的部分，才能记作未调用；**真的委派 Codex 就会产生对应消耗**，MCP 或 Tunnel 不会把它变成免费。[统计与回调回归说明](docs/console-usage-callback-fix.md)
 
-The runtime-pool callback fix and regression scope are documented in [usage accounting](docs/console-usage-callback-fix.md). Old records without reliable events may remain unavailable rather than being retrospectively invented.
+## 安全与当前限制
 
-## Safety and current limits
+请把连接视为高权限本地访问。文件工具做工作区路径校验，但 shell 使用本机用户权限，不是通用沙箱。应用、隧道和本地 provider 的安全确认分别生效；不要为减少提示而关闭鉴权、扩大到整块磁盘或开放未知服务。
 
-**Treat the connection as privileged local access.** File tools enforce workspace paths, but shell commands run with the local user's authority and are not a general filesystem sandbox. Source/resource claims coordinate participating processes; they cannot stop an unrelated editor or terminal.
+当前主要在 Windows 上开发和本地验证；上游跨平台代码及 CI 矩阵不代表当前所有功能都在所有平台通过。自动不可变快照、任意节点 fork、保证缓存命中和完整自动中断恢复不属于已完成承诺。
 
-Read-only analysis must not be confused with building, installing, writing to databases, operating a device, or publishing. Those operations need appropriate execution permissions and resource ownership. Interrupted claims require reconciliation; chat archival does not cancel processes.
+聊天归档不是停止后台进程。归档／恢复的安全夹具已覆盖多种边界，但此前零推理空线程实验没有完成真实恢复验证；使用前先验证明确授权的新测试会话，不要拿重要或未纳管聊天做实验。出现传输中断先核对任务和线上状态，不盲目重发写入或发布。
 
-The project is developed and locally exercised on Windows, with inherited cross-platform code and CI definitions. A CI matrix is not proof that every current fork feature was verified on every platform. Test your actual host/provider/OS combination. Inherited native artifact-download support also has platform-specific limits.
-
-Automatic immutable snapshots, arbitrary-checkpoint forks, guaranteed cache affinity, and complete automatic orphan recovery are not claimed. Archive/restore safety fixtures exist, but the recorded zero-inference empty-thread experiment did not complete real restore/list verification. Validate a newly created, explicitly authorized test conversation in your own Codex instance before relying on batch archival; do not experiment on unrelated chats.
-
-Never include owner secrets, provider credentials, private rollouts, task databases, personal paths, or unsanitized screenshots in public issues. See [publication checks](docs/open-source-checklist.md).
-
-## Development
+## 开发、文档与许可
 
 ```sh
 pnpm typecheck
@@ -139,27 +168,24 @@ pnpm test
 pnpm build
 ```
 
-Prefer focused changes, deterministic fixtures, and tests through the actual manager → pool → provider boundary. Run live-provider experiments only with explicit authorization and report their real cost. Keep source/candidate verification separate from activation of a running installation.
-
-## Documentation
-
-| Guide | Scope |
+| 文档 | 内容 |
 | --- | --- |
-| [Setup](docs/setup.md) | Existing compatible CLI and configuration flow; some upstream distribution references remain historical. |
-| [Host workflow](docs/chatgpt-coding-workflow.md) | Workspaces, tools, review and task receipts. |
-| [Configuration](docs/configuration.md) | Provider, concurrency, roots and console options. |
-| [Console](docs/project-console.md) | Origins, accounting, acceptance and archive safeguards. |
-| [Security](docs/security.md) | Authority and deployment boundaries. |
-| [Third-party notices](THIRD_PARTY_NOTICES.md) | Dependency and branding caveats. |
+| [ChatGPT MCP 接入教程](docs/chatgpt-mcp-setup.zh-CN.md) | Server URL、官方 Tunnel、OAuth、首次验收与排查。 |
+| [基础安装](docs/setup.md) | 本分支源码初始化与网络配置。 |
+| [主控工作流](docs/chatgpt-coding-workflow.md) | 工作区、工具、审查和回执。 |
+| [并发与会话](docs/host-first-readonly-workflows.md) | 主控直读、只读共享与上下文亲和。 |
+| [配置参考](docs/configuration.md) | Provider、授权目录、并发和任务台。 |
+| [安全模型](docs/security.md) | 权限和部署边界。 |
+| [第三方说明](THIRD_PARTY_NOTICES.md) | 依赖许可证与品牌使用边界。 |
 
-## License and upstream credit
+源码采用 [MIT](LICENSE)，保留 `Copyright (c) 2026 Waishnav` 及完整上游授权文本，来源见 [NOTICE](NOTICE)。依赖和模型服务分别适用自身条款，Claude Agent SDK 不因本项目 MIT 而变成 MIT。源码验收、运行服务启用和 npm 发布是不同阶段。
 
-Project source is distributed under the [MIT license](LICENSE). The original `Copyright (c) 2026 Waishnav` notice and the MIT permission text are preserved. See [NOTICE](NOTICE) for fork attribution.
+## 参考与致谢
 
-Dependencies and provider services retain their own licenses and terms. In particular, the Claude Agent SDK is not declared MIT by this repository; its package points to Anthropic's applicable terms. A binary/npm release requires an additional bundled-dependency notice review. TaskQuay has no official affiliation with its upstream or model providers.
+感谢 yyjeqhc 的 [webcodex 社区介绍与接入经验](https://linux.do/t/topic/2544729)。这里借鉴“网页端下发、本地执行、分步授权验收”的教程组织方式，结合 TaskQuay 实际实现和 OpenAI 官方资料重新编写；没有复制其专属命令、公共体验地址、图片、GPT Actions 接口或账号安全承诺。
 
-## Community link
+## 友情链接
 
 [LINUX DO - 新的理想型社区](https://linux.do/)
 
-An independent community link, not a statement of sponsorship or endorsement.
+友情链接与兼容性描述不代表赞助或官方背书。公开问题反馈请使用脱敏日志，不要上传真实口令、私人会话或状态数据库。
