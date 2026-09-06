@@ -69,6 +69,20 @@ The host remains the orchestrator. TaskQuay is not an opaque autonomous manager,
 
 **Local execution does not mean that all data stays on your machine.** File contents returned over MCP go to your selected host; delegated prompts and tool results may go to the model provider. Choose authorized projects and follow the host/provider's current privacy settings and terms.
 
+## Screenshots
+
+### Coordinate local Codex work from ChatGPT on the web
+
+![ChatGPT invoking local Codex and displaying code changes](docs/assets/调用本地codex截图.png)
+
+### View Codex token usage receipts in chat responses
+
+![A chat response showing Codex token usage and telemetry completeness](docs/assets/页面聊天显示token消耗.png)
+
+### Track tasks and token usage in the local project console
+
+![The local project console showing task status, acceptance results, and Codex token usage](docs/assets/console截图.png)
+
 ## Run from this source tree
 
 Requirements are defined in `package.json`: Node.js `>=22.19 <27`, Git, and the pinned `pnpm@11.25.0`. Install and authenticate a supported Codex CLI separately when you need Codex delegation. Direct workspace tools do not require a Codex inference call.

@@ -61,6 +61,20 @@ ChatGPT 网页对话 → 已授权的 TaskQuay MCP → 本地工作区 / Coding 
 
 主控仍然负责统筹，TaskQuay 是执行与证据层，不是黑盒自主总管。本地运行也不等于内容不离开电脑：返回的文件会进入你选择的主控，委派材料可能发送给模型提供方。不要连接未经授权的项目。
 
+## 一些使用截图
+
+### 网页 GPT 调用本地 Codex，统筹全局
+
+![网页 GPT 调用本地 Codex 并展示代码变更](docs/assets/调用本地codex截图.png)
+
+### 在回复中查看 Codex Token 用量回执
+
+![聊天回复中的 Codex Token 用量及统计完整性说明](docs/assets/页面聊天显示token消耗.png)
+
+### 在本地管理页面查看任务与 Token 消耗
+
+![本地项目管理台中的任务状态、验收结果与 Codex Token 用量](docs/assets/console截图.png)
+
 ## 从源码安装
 
 环境以 `package.json` 为准：Node.js `>=22.19 <27`、Git、`pnpm@11.25.0`。使用 Codex 委派时，另行安装并登录兼容的 Codex CLI；Windows 建议准备 Git Bash，并用 `doctor` 检查本机工具。直接读取工作区不需要发起 Codex 推理。
