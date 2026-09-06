@@ -3,6 +3,16 @@ import { randomUUID } from "node:crypto";
 import { digest, WorkLedger, type WorkOrigin } from "../work-ledger.js";
 import type { ToolRegistrationContext } from "./types.js";
 
+/** Registration-only targets deliberately have no transport/server instance.
+ * Legacy direct callers may expose a client label; otherwise leave it unknown
+ * instead of accessing a server captured before the per-request handler exists. */
+export function registeredClientLabel(target: ToolRegistrationContext["server"]): string | undefined {
+  if (!("server" in target)) return undefined;
+  const legacy = target.server as { getClientVersion?: () => { name?: unknown } | undefined } | undefined;
+  const name = legacy?.getClientVersion?.()?.name;
+  return typeof name === "string" ? name.slice(0, 120) : undefined;
+}
+
 export function hostOrigin(extra: { _meta?: Record<string, unknown>; authInfo?: { clientId?: string } }, clientLabel?: string, modelLabel?: string): WorkOrigin {
   const session = extra._meta?.["openai/session"];
   const reportedChatGPT = typeof session === "string" && session.length > 0;
@@ -38,7 +48,7 @@ export function registerWorkTaskTool({ server, config, workspaces, processSessio
       if (input.action === "begin") {
         if (!input.workItemId || !input.runKey || !input.title) throw new Error("begin requires workItemId, runKey and title.");
         const run = ledger.begin({ root: workspace.root, workspaceId: workspace.id, workItemId: input.workItemId,
-          runKey: input.runKey, title: input.title, origin: hostOrigin(extra, server.server.getClientVersion()?.name, input.hostModelLabel) });
+          runKey: input.runKey, title: input.title, origin: hostOrigin(extra, registeredClientLabel(server), input.hostModelLabel) });
         return reply({ ...ledger.receipt(run.id), consolePath: `/console/?project=${run.project_id}&run=${run.id}` });
       }
       if (input.action === "list") return reply(ledger.listRuns(ledger.project(workspace.root).id));

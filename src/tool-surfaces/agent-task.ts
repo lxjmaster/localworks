@@ -6,7 +6,7 @@ import { presentAgentObservation, presentAgentReceipt, presentAgentSummary } fro
 import { LocalAgentStore } from "../local-agent-store.js";
 import type { ToolRegistrationContext } from "./types.js";
 import { WorkLedger } from "../work-ledger.js";
-import { hostOrigin } from "./work-task.js";
+import { hostOrigin, registeredClientLabel } from "./work-task.js";
 
 type AgentClient = Pick<LocalAgentClient, "start" | "continue" | "get" | "list"> & Partial<Pick<LocalAgentClient, "cancelQueued">>;
 
@@ -84,7 +84,7 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
         if (input.workRunId) ledger.requireScope(input.workRunId, workspace.root, workspace.id);
         else overrides.workRunId = ledger.begin({ root: workspace.root, workspaceId: workspace.id, workItemId: input.workItemId!,
           runKey: `delegation:${input.taskKey!}`, title: `DevSpace · ${input.workItemId!}`.slice(0, 160),
-          origin: hostOrigin(extra, server.server.getClientVersion()?.name) }).id;
+          origin: hostOrigin(extra, registeredClientLabel(server)) }).id;
       } catch (error) { return reply({ code: "WORK_STATE", message: error instanceof Error ? error.message : "Cannot bind work run." }, true); }
       finally { ledger.close(); }
       const result = input.action === "start"

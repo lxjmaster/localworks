@@ -390,6 +390,32 @@ test("HTTP endpoint serves modern MCP and stateless legacy clients", async (t) =
   assert.equal(repeatedBody.result?.structuredContent?.workspaceId, workspaceId);
   assert.equal(repeatedBody.result?.structuredContent?.agentsFiles, undefined);
 
+  // Fork tools must run through the compiled, per-request registration surface;
+  // it intentionally does not expose a legacy `server.server` transport object.
+  const callWork = async (arguments_: Record<string, unknown>) => {
+    const response = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
+      name: "work_task", arguments: { workspaceId, ...arguments_ },
+      _meta: { "openai/session": "modern-http-test" },
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as { result?: { isError?: boolean; content?: Array<{ type: string; text?: string }> } };
+    assert.ok(body.result && !body.result.isError, JSON.stringify(body));
+    const content = body.result.content?.find((item) => item.type === "text")?.text;
+    assert.equal(typeof content, "string");
+    return JSON.parse(content!) as {
+      workRunId: string; usageStatus: string; codexUsage: { totalTokens: number };
+      acceptanceStatus: string; origin: { entryPoint: string; evidence: string };
+    };
+  };
+  const begun = await callWork({ action: "begin", workItemId: "modern-work-flow", runKey: "first", title: "Modern host-only work" });
+  assert.equal(begun.origin.entryPoint, "chatgpt_mcp");
+  assert.equal(begun.origin.evidence, "client_reported");
+  const finished = await callWork({ action: "finish", workRunId: begun.workRunId,
+    status: "completed", acceptance: "not_applicable", summary: "Host-only protocol check", evidence: [] });
+  assert.equal(finished.codexUsage.totalTokens, 0);
+  assert.equal(finished.usageStatus, "not_used");
+  assert.equal(finished.acceptanceStatus, "not_applicable");
+
   const legacy = await fetch(`${localBaseUrl}/mcp`, {
     method: "POST",
     headers: {

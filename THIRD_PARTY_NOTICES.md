@@ -10,7 +10,7 @@ The project-level MIT license allows distribution of this fork's project source 
 
 ## Direct runtime and optional dependencies
 
-Versions below are the installed versions observed during this review, not a promise about future resolutions. Use `pnpm-lock.yaml` and inspect the exact packages included in each release.
+Versions below reflect the reviewed source and the fresh frozen-lockfile verification install used for publication, not a promise about future resolutions. Use `pnpm-lock.yaml` and inspect the exact packages included in each release.
 
 | Dependency | Observed version | Declared license / terms |
 | --- | --- | --- |
@@ -20,7 +20,9 @@ Versions below are the installed versions observed during this review, not a pro
 | `@clack/prompts` | 1.5.1 | MIT |
 | `@earendil-works/pi-coding-agent` | 0.80.3 | MIT |
 | `@modelcontextprotocol/ext-apps` | 1.7.2 | MIT |
+| `@modelcontextprotocol/node` | 2.0.0 | MIT |
 | `@modelcontextprotocol/sdk` | 1.29.0 | MIT |
+| `@modelcontextprotocol/server` | 2.0.0 | MIT |
 | `@opencode-ai/sdk` | 1.17.13 | MIT |
 | `@pierre/diffs` | 1.3.6 | Apache-2.0 |
 | `better-result` | 2.10.0 | MIT |
@@ -33,7 +35,7 @@ Versions below are the installed versions observed during this review, not a pro
 | `lucide` | 1.24.0 | ISC |
 | `react` | 19.2.6 | MIT |
 | `react-dom` | 19.2.6 | MIT |
-| `semver` | 7.7.1 | ISC |
+| `semver` | 7.8.4 | ISC |
 | `yaml` | 2.9.0 | ISC |
 | `zod` | 4.4.3 | MIT |
 | `node-pty` (optional) | 1.1.0 | MIT |

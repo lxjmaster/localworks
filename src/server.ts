@@ -672,8 +672,8 @@ function registerMcpSurface(
     },
   );
 
-  registerWorkspaceContextTool({ server, config, workspaces, processSessions });
-  registerWorkTaskTool({ server, config, workspaces, processSessions });
+  registerWorkspaceContextTool({ server: registrationTarget, config, workspaces, processSessions });
+  registerWorkTaskTool({ server: registrationTarget, config, workspaces, processSessions });
 
   toolSurface.register({
     server: registrationTarget,
