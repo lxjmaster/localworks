@@ -1,0 +1,20 @@
+TaskQuay
+
+TaskQuay is an independently maintained fork of DevSpace:
+https://github.com/Waishnav/devspace
+
+Fork source repository:
+https://github.com/wrfgup/taskquay
+
+Upstream copyright: Copyright (c) 2026 Waishnav.
+The original MIT copyright and permission notice is retained in LICENSE.
+Fork contributions are distributed under the same MIT license unless a file
+explicitly identifies another applicable license.
+
+TaskQuay is the public-facing project name. Existing devspace CLI names,
+configuration paths, tool identifiers and UI labels are retained for compatibility.
+This fork is not an official release or endorsement of the upstream project.
+
+Third-party code, service terms, names, logos and other separately identified
+materials retain their own rights. See THIRD_PARTY_NOTICES.md. This notice does
+not relicense third-party dependencies or grant rights to provider trademarks.

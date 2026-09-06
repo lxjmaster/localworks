@@ -1,6 +1,15 @@
 {
   "name": "@waishnav/devspace",
   "version": "1.0.8",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wrfgup/taskquay.git"
+  },
+  "homepage": "https://github.com/wrfgup/taskquay#readme",
+  "bugs": {
+    "url": "https://github.com/wrfgup/taskquay/issues"
+  },
   "description": "Expose a secure local coding workspace through an MCP server.",
   "type": "module",
   "main": "dist/server.js",
@@ -20,7 +29,10 @@
     "schema",
     "scripts",
     "skills",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "publishConfig": {
     "access": "public"

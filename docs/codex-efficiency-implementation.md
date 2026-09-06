@@ -63,14 +63,14 @@ All verification after the initial provider failure used deterministic local too
 - The compiled JavaScript coordinator was loaded in a separate smoke command: conflicting checkout acquisition was rejected, release allowed the next command, and no provider was invoked. After adding CLI help text for `--task-key`, targeted task/CLI tests, type checking and isolated TypeScript emission were rerun successfully.
 - Early full runs exposed old protocol-version and migration-list fixtures; these now follow the new contracts without weakening unauthorized-request or migration assertions.
 
-Commands used (serially):
+Commands used (serially; the local checkout prefix is replaced with `<CHECKOUT>`):
 
 ```text
 node node_modules/tsx/dist/cli.mjs scripts/generate-config-schema.ts
 node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 --test-reporter=spec "src/**/*.test.ts"
 node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit
 node node_modules/typescript/bin/tsc -p tsconfig.build.json --outDir node_modules/.cache/devspace-candidate/dist
-node node_modules/vite/bin/vite.js build --outDir D:/project/devspace/node_modules/.cache/devspace-candidate/dist/ui
+node node_modules/vite/bin/vite.js build --outDir <CHECKOUT>/node_modules/.cache/devspace-candidate/dist/ui
 node node_modules/.cache/devspace-candidate/dist/cli.js --help
 ```
 
