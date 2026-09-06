@@ -8,12 +8,14 @@ import type {
   StartLocalAgentInput,
 } from "./local-agent-manager.js";
 import type { LocalAgentWriteMode } from "./local-agent-runtime.js";
+import { validateContextShape } from "./workspace-context.js";
 import { LOCAL_AGENT_DAEMON_PROTOCOL_VERSION } from "./local-agent-daemon-lifecycle.js";
 
 export type LocalAgentDaemonMethod =
   | "hello"
   | "agent.start"
   | "agent.continue"
+  | "agent.cancelQueued"
   | "agent.get"
   | "agent.list"
   | "daemon.status"
@@ -25,6 +27,7 @@ export type LocalAgentDaemonRequest =
   | AgentDaemonRequestBase<"agent.start", StartLocalAgentInput>
   | AgentDaemonRequestBase<"agent.continue", { id: string; prompt: string; scope: LocalAgentWorkspaceScope; overrides?: RunOverrides }>
   | AgentDaemonRequestBase<"agent.get", { id: string; scope: LocalAgentWorkspaceScope }>
+  | AgentDaemonRequestBase<"agent.cancelQueued", { id: string; scope: LocalAgentWorkspaceScope }>
   | AgentDaemonRequestBase<"agent.list", LocalAgentWorkspaceScope>
   | AgentDaemonRequestBase<"daemon.status", Record<string, never>>
   | AgentDaemonRequestBase<"daemon.stop", Record<string, never>>
@@ -114,6 +117,7 @@ export function decodeLocalAgentDaemonRequest(value: unknown): LocalAgentDaemonR
         method,
         params: decodeContinueInput(params),
       } as LocalAgentDaemonRequest;
+    case "agent.cancelQueued":
     case "agent.get":
       return {
         requestId,
@@ -194,6 +198,9 @@ export function decodeAgentRecord(value: unknown): LocalAgentRecord {
     errorRetryable: optionalBoolean(record?.errorRetryable),
     createdAt: requiredString(record?.createdAt, "createdAt"),
     updatedAt: requiredString(record?.updatedAt, "updatedAt"),
+    contextKey: optionalString(record?.contextKey),
+    contextSignature: optionalString(record?.contextSignature),
+    workItemId: optionalString(record?.workItemId),
   };
 }
 
@@ -252,6 +259,11 @@ function decodeStartInput(value: unknown): StartLocalAgentInput {
     effort: optionalString(record?.effort),
     writeMode: decodeWriteMode(record?.writeMode),
     taskKey: optionalString(record?.taskKey),
+    workItemId: optionalString(record?.workItemId),
+    contextKey: optionalString(record?.contextKey),
+    freshContext: optionalBoolean(record?.freshContext),
+    context: decodeContext(record?.context),
+    resources: decodeResources(record?.resources),
   };
 }
 
@@ -266,6 +278,9 @@ function decodeContinueInput(value: unknown): { id: string; prompt: string; scop
       model: optionalString(overrides.model),
       effort: optionalString(overrides.effort),
       writeMode: decodeWriteMode(overrides.writeMode),
+      requestKey: optionalString(overrides.requestKey),
+      context: decodeContext(overrides.context),
+      resources: decodeResources(overrides.resources),
     } } : {}),
   };
 }
@@ -302,7 +317,21 @@ function decodeWriteMode(value: unknown): LocalAgentWriteMode | undefined {
 }
 
 function isLocalAgentStatus(value: string): value is LocalAgentStatus {
-  return value === "starting" || value === "running" || value === "idle" || value === "error" || value === "stopped";
+  return value === "starting" || value === "queued" || value === "running" || value === "idle" || value === "error" || value === "stopped";
+}
+
+function decodeContext(value: unknown) {
+  try { return validateContextShape(value); }
+  catch { throw new LocalAgentDaemonProtocolError("INVALID_PARAMS", "Invalid host-prepared context."); }
+}
+
+function decodeResources(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 16 || value.some((key) => typeof key !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(key))) {
+    throw new LocalAgentDaemonProtocolError("INVALID_PARAMS", "Invalid exclusive resources.");
+  }
+  return value;
 }
 
 function requiredString(value: unknown, field: string): string {

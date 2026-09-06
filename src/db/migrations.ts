@@ -7,6 +7,7 @@ interface Migration {
 }
 
 const migrations: Migration[] = [
+  // New versions are appended below; existing migrations remain immutable.
   {
     version: 1,
     name: "workspace-state",
@@ -80,6 +81,43 @@ const migrations: Migration[] = [
     },
   },
 ];
+
+migrations.push({
+  version: 10,
+  name: "bounded-read-admission-and-context-affinity",
+  up(sqlite) {
+    // A legacy claim has unknown effects and remains exclusive after upgrade.
+    addColumnIfMissing(sqlite, "execution_claims", "access_mode", "text not null default 'write'");
+    addColumnIfMissing(sqlite, "execution_claims", "thread_key", "text");
+    addColumnIfMissing(sqlite, "local_agent_sessions", "context_key", "text");
+    addColumnIfMissing(sqlite, "local_agent_sessions", "context_signature", "text");
+    addColumnIfMissing(sqlite, "local_agent_sessions", "work_item_id", "text");
+    sqlite.exec(`
+      create table execution_waiters (
+        sequence integer primary key autoincrement,
+        id text not null unique,
+        owner_id text not null,
+        owner_pid integer not null,
+        kind text not null,
+        checkout_root text not null,
+        agent_id text,
+        thread_key text,
+        access_mode text not null,
+        resources text not null,
+        expires_at_ms integer not null
+      );
+      create index execution_waiters_order on execution_waiters(sequence);
+      create table agent_continue_keys (
+        agent_id text not null references local_agent_sessions(id) on delete cascade,
+        request_key text not null,
+        request_hash text not null,
+        primary key(agent_id, request_key)
+      );
+      create index agent_context_affinity on local_agent_sessions
+        (workspace_root, workspace_id, profile_name, work_item_id, context_key, context_signature);
+    `);
+  },
+});
 
 export function migrateDatabase(sqlite: Database.Database): void {
   const migrate = sqlite.transaction(() => {
@@ -279,7 +317,7 @@ function migrateLocalAgentEffortRename(sqlite: Database.Database): void {
 
 function addColumnIfMissing(
   sqlite: Database.Database,
-  table: "workspace_sessions" | "local_agent_sessions",
+  table: "workspace_sessions" | "local_agent_sessions" | "execution_claims",
   column: string,
   definition: string,
 ): void {

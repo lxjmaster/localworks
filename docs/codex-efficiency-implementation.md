@@ -1,5 +1,9 @@
 # Codex efficiency and coordinated execution
 
+Historical phase-one record. Its blanket single-reader policy is superseded by
+[host-first, bounded read-only workflows](host-first-readonly-workflows.md).
+The original verification below remains a record of that earlier implementation.
+
 ## Goal and priority (2026-09-06)
 
 The user's optimization target is **Codex provider token usage**, not host-model token usage. The host should receive clean, low-noise evidence and remain able to complete long tasks with rigorous acceptance. Do not lower review or release standards to reduce tokens.

@@ -29,7 +29,7 @@ export function claudeInstructions({
   agents,
   skills,
 }: ToolInstructionContext): string {
-  return `${agents}${skills}${CLAUDE_INSTRUCTIONS} Use agent_task for subagent control, not a shell wrapper. Continue the same agent for related work; managed commands and mutations serialize with agent turns in the same checkout.`;
+  return `${agents}${skills}${CLAUDE_INSTRUCTIONS} Read project context directly as the host with read or workspace_context before deciding to delegate. These tools do not invoke Codex; do not start workers merely to browse directories, summarize known logs or wait. Use agent_task for subagent control, not shell wrappers. Pass relevant versioned evidence and continue related sessions. Verified readers share bounded access; writes and unknown-effect commands remain exclusive.`;
 }
 
 export function registerClaudeTools(context: ToolRegistrationContext): void {

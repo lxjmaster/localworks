@@ -5,7 +5,7 @@ import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import { AgentConflictError, AgentStoreError, isProgrammerDefect } from "./local-agent-errors.js";
 import { recordAgentUsage, readAgentUsage, type AgentUsageObservation } from "./agent-usage.js";
 
-export type LocalAgentStatus = "starting" | "running" | "idle" | "error" | "stopped";
+export type LocalAgentStatus = "starting" | "queued" | "running" | "idle" | "error" | "stopped";
 
 export interface LocalAgentRecord {
   id: string;
@@ -23,6 +23,9 @@ export interface LocalAgentRecord {
   errorRetryable?: boolean;
   createdAt: string;
   updatedAt: string;
+  contextKey?: string;
+  contextSignature?: string;
+  workItemId?: string;
 }
 
 export interface CreateLocalAgentRecordInput {
@@ -32,6 +35,9 @@ export interface CreateLocalAgentRecordInput {
   provider: string;
   model?: string;
   effort?: string;
+  contextKey?: string;
+  contextSignature?: string;
+  workItemId?: string;
 }
 
 export interface LocalAgentWorkspaceScope {
@@ -60,6 +66,9 @@ interface LocalAgentRow {
   error_retryable: string | null;
   created_at: string;
   updated_at: string;
+  context_key: string | null;
+  context_signature: string | null;
+  work_item_id: string | null;
 }
 
 export class LocalAgentStore {
@@ -164,8 +173,9 @@ export class LocalAgentStore {
     return storeResult("create", () => this.create(input));
   }
 
-  createTaskResult(input: CreateLocalAgentRecordInput, task?: { key: string; hash: string; canonicalRoot: string }):
-    BetterResult<{ record: LocalAgentRecord; reused: boolean }, AgentStoreError | AgentConflictError> {
+  createTaskResult(input: CreateLocalAgentRecordInput, task?: { key: string; hash: string; canonicalRoot: string },
+    reuseContext = true, maximumNewSessions = 3):
+    BetterResult<{ record: LocalAgentRecord; reused: boolean; resumedContext?: boolean }, AgentStoreError | AgentConflictError> {
     try {
       return Result.ok(this.database.sqlite.transaction(() => {
         if (task) {
@@ -181,15 +191,66 @@ export class LocalAgentStore {
             return { record, reused: true };
           }
         }
-        const record = this.create(input);
+        let record: LocalAgentRecord | undefined;
+        let resumedContext = false;
+        if (reuseContext && input.contextKey && input.workItemId && input.contextSignature) {
+          const found = this.database.sqlite.prepare(`select * from local_agent_sessions where workspace_root = ?
+            and coalesce(workspace_id, '') = ? and profile_name = ? and work_item_id = ? and context_key = ?
+            and context_signature = ? and status in ('starting', 'queued', 'running', 'idle')
+            order by updated_at desc limit 1`)
+            .get(resolve(input.workspaceRoot), input.workspaceId ?? "", input.profileName, input.workItemId,
+              input.contextKey, input.contextSignature) as LocalAgentRow | undefined;
+          if (found) {
+            if (found.status !== "idle") throw new AgentConflictError({ code: "AGENT_CONFLICT", agentId: found.id,
+              operation: "context_affinity", retryable: true,
+              message: "The related session is occupied. Observe it, then continue; do not create another copy of its context." });
+            if (found.provider_session_id) {
+              record = this.update(found.id, { status: "starting" });
+              resumedContext = true;
+            }
+          }
+        }
+        if (!record) {
+          if (input.workItemId) {
+            const used = (this.database.sqlite.prepare(`select count(*) as n from local_agent_sessions where workspace_root = ?
+              and coalesce(workspace_id, '') = ? and work_item_id = ? and (status != 'stopped' or provider_session_id is not null)`)
+              .get(resolve(input.workspaceRoot), input.workspaceId ?? "", input.workItemId) as { n: number }).n;
+            if (used >= maximumNewSessions) throw new AgentConflictError({ code: "AGENT_CONFLICT", operation: "session_budget", retryable: false,
+              message: "New-session budget reached for this work item. Reuse a related session or explicitly adjust the configured budget." });
+          }
+          record = this.create(input);
+          this.database.sqlite.prepare(`update local_agent_sessions set context_key = ?, context_signature = ?, work_item_id = ? where id = ?`)
+            .run(input.contextKey ?? null, input.contextSignature ?? null, input.workItemId ?? null, record.id);
+          record = this.getById(record.id)!;
+        }
         if (task) this.database.sqlite.prepare(`insert into agent_task_keys
           (workspace_root, workspace_scope, target, task_key, request_hash, agent_id) values (?, ?, ?, ?, ?, ?)`)
           .run(task.canonicalRoot, input.workspaceId ?? "", input.profileName, task.key, task.hash, record.id);
-        return { record, reused: false };
+        return { record, reused: false, resumedContext };
       }).immediate());
     } catch (error) {
       return Result.err(AgentConflictError.is(error) ? error : new AgentStoreError("task_identity", error));
     }
+  }
+
+  reserveContinueResult(agentId: string, key: string, hash: string): BetterResult<boolean, AgentConflictError | AgentStoreError> {
+    try {
+      return Result.ok(this.database.sqlite.transaction(() => {
+        const old = this.database.sqlite.prepare("select request_hash from agent_continue_keys where agent_id = ? and request_key = ?")
+          .get(agentId, key) as { request_hash: string } | undefined;
+        if (old) {
+          if (old.request_hash !== hash) throw new AgentConflictError({ code: "AGENT_CONFLICT", agentId, operation: "continue_identity",
+            retryable: false, message: "Continuation key already belongs to a different request." });
+          return true;
+        }
+        const record = this.getById(agentId);
+        if (!record || ["starting", "queued", "running"].includes(record.status)) throw new AgentConflictError({ code: "AGENT_CONFLICT", agentId,
+          operation: "continue", retryable: true, message: "This session already has pending work. Observe it before continuing." });
+        this.database.sqlite.prepare("insert into agent_continue_keys(agent_id, request_key, request_hash) values (?, ?, ?)").run(agentId, key, hash);
+        this.update(agentId, { status: "starting" });
+        return false;
+      }).immediate());
+    } catch (error) { return Result.err(AgentConflictError.is(error) ? error : new AgentStoreError("continue_identity", error)); }
   }
 
   getById(id: string): LocalAgentRecord | undefined {
@@ -240,6 +301,9 @@ export class LocalAgentStore {
           error = ?,
           error_code = ?,
           error_retryable = ?,
+          context_key = ?,
+          context_signature = ?,
+          work_item_id = ?,
           updated_at = ?
          where id = ?`,
       )
@@ -256,6 +320,9 @@ export class LocalAgentStore {
         updated.error ?? null,
         updated.errorCode ?? null,
         updated.errorRetryable === undefined ? null : String(updated.errorRetryable),
+        updated.contextKey ?? null,
+        updated.contextSignature ?? null,
+        updated.workItemId ?? null,
         updated.updatedAt,
         updated.id,
       );
@@ -276,7 +343,7 @@ export class LocalAgentStore {
       .prepare(
         `update local_agent_sessions
          set status = 'error', error = ?, error_code = 'DAEMON_UNAVAILABLE', error_retryable = 'true', updated_at = ?
-         where status in ('starting', 'running')`,
+         where status in ('starting', 'queued', 'running')`,
       )
       .run(message, now);
     return Number(result.changes);
@@ -315,6 +382,9 @@ function rowToLocalAgentRecord(row: LocalAgentRow): LocalAgentRecord {
     errorRetryable: readOptionalBoolean(row.error_retryable),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    contextKey: row.context_key ?? undefined,
+    contextSignature: row.context_signature ?? undefined,
+    workItemId: row.work_item_id ?? undefined,
   };
 }
 
@@ -336,6 +406,7 @@ function storeResult<T>(operation: string, run: () => T): BetterResult<T, AgentS
 function readStatus(status: string): LocalAgentStatus {
   if (
     status === "starting" ||
+    status === "queued" ||
     status === "running" ||
     status === "idle" ||
     status === "error" ||

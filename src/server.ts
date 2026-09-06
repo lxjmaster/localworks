@@ -40,6 +40,7 @@ import {
   type McpRegistrationTarget,
 } from "./mcp-modern-server.js";
 import { ProcessSessionManager } from "./process-sessions.js";
+import { registerWorkspaceContextTool } from "./tool-surfaces/workspace-context.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
@@ -594,7 +595,7 @@ function registerMcpSurface(
       title: "Read file",
       description:
         [
-          "Read a file in a workspace. Use this for file inspection instead of shell commands like cat or sed.",
+          "Read directly as the host, without invoking Codex. Prefer direct reads for context gathering; delegate only reasoning or implementation that actually needs a worker. Use this instead of shell commands like cat or sed.",
           "Use this tool to inspect relevant AGENTS.md or CLAUDE.md files listed by open_workspace before working in nested directories.",
           config.skillsEnabled
             ? "If available skills were returned and a task matches one, read that skill's path before proceeding. Skill paths may be outside the workspace; files within advertised skill directories are readable."
@@ -633,14 +634,14 @@ function registerMcpSurface(
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       const readPath = workspaces.resolveReadPath(workspace, input.path);
-      const response = await readFileTool(
+      const response = await processSessions.readWorkspace(workspace.root, () => readFileTool(
         { ...input, path: readPath.absolutePath },
         {
           cwd: workspace.root,
           root: workspace.root,
           readRoots: readPath.readRoots,
         },
-      );
+      ));
 
       if (response.isError) {
         logFailedToolResponse(config, {
@@ -667,6 +668,8 @@ function registerMcpSurface(
       };
     },
   );
+
+  registerWorkspaceContextTool({ server, config, workspaces, processSessions });
 
   toolSurface.register({
     server: registrationTarget,

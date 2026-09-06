@@ -151,10 +151,19 @@ and concurrency policy. See [coordination and migration notes](configuration.md#
 
 ## Tool Names
 
+Gather context with the host first. `read` and `workspace_context` are deterministic
+local tools, not Codex calls. The latter lists one directory, captures selected ranges
+with whole-file hashes, and performs literal searches in selected files. Applicable
+project instructions still need reading. Create a worker only when extra reasoning
+or implementation is useful, and send concise facts plus versioned refs rather than
+the whole host conversation. Follow-ups use the same relevant session; independent
+acceptance may deliberately use a fresh one. See [host-first workflows](host-first-readonly-workflows.md).
+
 The Claude surface exposes these tool names:
 
 - `open_workspace`
 - `read`
+- `workspace_context`
 - `agent_task`
 - `write`
 - `edit`
@@ -165,6 +174,7 @@ DevSpace uses the Codex-style surface by default. It exposes:
 
 - `open_workspace`
 - `read`
+- `workspace_context`
 - `agent_task`
 - `apply_patch`
 - `exec_command`
@@ -178,9 +188,9 @@ a PTY, or send Ctrl-C. Set `tty: true` only for commands that need a terminal.
 
 Set `tools.mode` to `claude` in `~/.devspace/config.jsonc` to expose `write`,
 `edit`, and `bash` instead of the Codex mutation and command tools. Dedicated
-MCP tools for `grep`, `glob`, and `ls` are not registered in either mode; use
-the configured shell tool with command-line tools such as `rg`, `find`, and
-`ls`.
+MCP tools for `grep`, `glob`, and `ls` are not registered in either mode. Prefer
+workspace_context for bounded listing/capture/search. Specialized shell commands
+remain available, but arbitrary shell effects are treated as exclusive.
 
 ## Show Changes
 

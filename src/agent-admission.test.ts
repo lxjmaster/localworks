@@ -34,7 +34,7 @@ function fixture(t: test.TestContext, maximum = 1) {
   const driver: LocalAgentDriver = { provider: "codex", runtimeKey: () => "fixture", createRuntime: async () => Result.ok(runtime) };
   const manager = new LocalAgentManager({ store: new LocalAgentStore(stateDir), drivers: [driver],
     pool: new LocalAgentRuntimePool(), loadProfiles: async () => [], allowedRoots: [root],
-    subagents: { enabled: true, maxConcurrentAgents: maximum, providers: [{ id: "codex", enabled: true }] } });
+    subagents: { enabled: true, maxConcurrentAgents: maximum, queueWaitMs: 0, providers: [{ id: "codex", enabled: true }] } });
   const processes = new ProcessSessionManager({ stateDir });
   t.after(async () => { await manager.close(); processes.shutdown(); await delay(20); rmSync(root, { recursive: true, force: true }); });
   const release = async () => {
@@ -50,7 +50,7 @@ async function settleCalls(calls: unknown[], count: number) {
   assert.equal(calls.length, count);
 }
 
-test("eight concurrent tasks admit exactly one provider turn, including read-only", async (t) => {
+test("explicit serial/no-queue policy admits one provider turn, including unverified read-only drivers", async (t) => {
   const f = fixture(t);
   const results = await Promise.all(Array.from({ length: 8 }, (_, i) => f.manager.start({ ...f.scope,
     target: "codex", prompt: `task ${i}`, writeMode: "read_only" })));

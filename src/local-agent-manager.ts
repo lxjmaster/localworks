@@ -1,6 +1,8 @@
 import { resolve } from "node:path";
-import { ExecutionCoordinator, ExecutionConflictError, canonicalExecutionRoot, type ExecutionClaim } from "./execution-coordinator.js";
-import { createHash } from "node:crypto";
+import { ExecutionCoordinator, ExecutionConflictError, canonicalExecutionRoot, type ExecutionClaim, type ExecutionTicket } from "./execution-coordinator.js";
+import { setTimeout as delay } from "node:timers/promises";
+import { contextPrompt, validateContextShape, verifyHostContext, type HostPreparedContext } from "./workspace-context.js";
+import { createHash, randomUUID } from "node:crypto";
 import { Result, type Result as BetterResult } from "better-result";
 import {
   AgentConflictError,
@@ -47,12 +49,20 @@ export interface StartLocalAgentInput {
   effort?: string;
   writeMode?: LocalAgentWriteMode;
   taskKey?: string;
+  workItemId?: string;
+  contextKey?: string;
+  freshContext?: boolean;
+  context?: HostPreparedContext;
+  resources?: string[];
 }
 
 export interface RunOverrides {
   model?: string;
   effort?: string;
   writeMode?: LocalAgentWriteMode;
+  requestKey?: string;
+  context?: HostPreparedContext;
+  resources?: string[];
 }
 
 export interface LocalAgentManagerLogger {
@@ -90,6 +100,7 @@ export class LocalAgentManager {
   private readonly logger?: LocalAgentManagerLogger;
   private readonly subagents: SubagentsConfig;
   private readonly activeTurns = new Map<string, Promise<void>>();
+  private readonly queuedTurns = new Map<string, AbortController>();
   private readonly execution: ExecutionCoordinator;
   private accepting = true;
   private closePromise?: Promise<void>;
@@ -146,12 +157,29 @@ export class LocalAgentManager {
       }
       yield* manager.providerEnabledResult(target.provider, target.name, "start");
       yield* manager.driverResult(target.provider, "start");
+      try {
+        validateContextShape(input.context);
+        for (const key of [input.workItemId, input.contextKey]) {
+          if (key !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(key)) throw new Error("Invalid context/work item key.");
+        }
+        if (input.contextKey && !input.workItemId) throw new Error("Context affinity requires a workItemId.");
+      } catch (error) {
+        return Result.err(new AgentTargetError({ code: "TARGET_RESOLUTION_FAILED", target: input.target,
+          retryable: false, message: error instanceof Error ? error.message : "Invalid host context." }));
+      }
       if (input.taskKey !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.taskKey)) {
         return Result.err(new AgentTargetError({ code: "TARGET_RESOLUTION_FAILED", target: input.target,
           retryable: false, message: "Invalid task key." }));
       }
       const task = input.taskKey ? { key: input.taskKey, canonicalRoot: canonicalExecutionRoot(workspaceRoot),
-        hash: createHash("sha256").update(JSON.stringify([input.prompt, input.target, input.writeMode, input.model, input.effort])).digest("hex") } : undefined;
+        hash: createHash("sha256").update(JSON.stringify([input.prompt, input.target, input.writeMode, input.model, input.effort,
+          input.context, input.contextKey, input.workItemId, input.freshContext, input.resources])).digest("hex") } : undefined;
+      const provider = manager.subagents.providers.find((entry) => entry.id === target.provider);
+      const mode = input.writeMode ?? provider?.writeMode ?? "allowed";
+      const readDefaults = mode === "read_only" ? provider?.readOnlyDefaults : undefined;
+      const signature = createHash("sha256").update(JSON.stringify([target.provider,
+        input.model ?? readDefaults?.model ?? target.model, input.effort ?? readDefaults?.effort ?? target.effort,
+        mode, target.kind === "profile" ? target.profile.body : "", "host-first-v1"])).digest("hex");
       const created = yield* manager.store.createTaskResult({
         workspaceId: input.workspaceId,
         workspaceRoot,
@@ -159,7 +187,10 @@ export class LocalAgentManager {
         provider: target.provider,
         model: target.model,
         effort: target.effort,
-      }, task);
+        contextKey: input.contextKey,
+        contextSignature: signature,
+        workItemId: input.workItemId,
+      }, task, !input.freshContext, manager.subagents.maxNewSessionsPerWorkItem ?? 3);
       const record = created.record;
       if (created.reused) {
         yield* manager.agentWorkspaceResult(record, { workspaceId: input.workspaceId, workspaceRoot }, "start");
@@ -169,6 +200,8 @@ export class LocalAgentManager {
         model: input.model,
         effort: input.effort,
         writeMode: input.writeMode,
+        context: input.context,
+        resources: input.resources,
       }, input.workspaceId, target);
       if (started.isErr()) manager.store.updateResult(record.id, {
         status: "stopped", error: started.error.message,
@@ -197,7 +230,24 @@ export class LocalAgentManager {
       const target = resolveLocalAgentTarget(
         record.profileName, profiles, undefined, undefined, manager.subagents.providers,
       );
-      return manager.begin(record, prompt, overrides, scope.workspaceId, target);
+      try { validateContextShape(overrides.context); } catch {
+        return Result.err(new AgentTargetError({ code: "TARGET_RESOLUTION_FAILED", target: record.profileName,
+          retryable: false, message: "Invalid host-prepared continuation context." }));
+      }
+      {
+        // Even a legacy CLI continuation needs a cross-process reservation.
+        // Without a caller key it is not replayable, but it still cannot race a thread.
+        const key = overrides.requestKey ?? `legacy-${randomUUID()}`;
+        if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(key)) return Result.err(new AgentTargetError({
+          code: "TARGET_RESOLUTION_FAILED", target: record.profileName, retryable: false, message: "Invalid continuation request key." }));
+        const hash = createHash("sha256").update(JSON.stringify([prompt, overrides])).digest("hex");
+        const replay = yield* manager.store.reserveContinueResult(agentId, key, hash);
+        if (replay) return manager.store.getByIdResult(agentId).map((value) => value!);
+      }
+      const begun = manager.begin(record, prompt, overrides, scope.workspaceId, target);
+      if (begun.isErr()) manager.store.updateResult(agentId, { status: "stopped", error: begun.error.message,
+        errorCode: begun.error.code, errorRetryable: begun.error.retryable });
+      return begun;
     });
   }
 
@@ -226,6 +276,7 @@ export class LocalAgentManager {
   async close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.accepting = false;
+    for (const controller of this.queuedTurns.values()) controller.abort();
     const turns = Array.from(this.activeTurns.values());
     this.closePromise = (async () => {
       // Closing pooled runtimes is what interrupts provider turns. Waiting for
@@ -255,6 +306,17 @@ export class LocalAgentManager {
     await this.pool.evictIdle(now);
   }
 
+  cancelQueued(agentId: string, scope: LocalAgentWorkspaceScope): BetterResult<LocalAgentRecord, AgentLookupError | AgentConflictError> {
+    const found = this.get(agentId, scope);
+    if (found.isErr()) return found;
+    const controller = this.queuedTurns.get(agentId);
+    if (!controller) return Result.err(new AgentConflictError({ code: "AGENT_CONFLICT", agentId,
+      operation: "cancel_queued", retryable: false, message: "Only a queued, not-yet-started turn may be cancelled here." }));
+    controller.abort();
+    return this.store.updateResult(agentId, { status: "stopped", error: "Queued task cancelled before provider invocation.",
+      errorCode: "PROVIDER_CANCELLED", errorRetryable: false });
+  }
+
   private begin(
     record: LocalAgentRecord,
     prompt: string,
@@ -272,19 +334,34 @@ export class LocalAgentManager {
       }));
     }
 
-    let claim: ExecutionClaim;
+    // Resolve effective capability BEFORE choosing the source lock, not after it.
+    const providerConfig = this.subagents.providers.find((provider) => provider.id === record.provider);
+    const effectiveMode = overrides.writeMode ?? providerConfig?.writeMode ?? "allowed";
+    const analysisOnly = effectiveMode === "read_only" && this.drivers.get(record.provider as LocalAgentProvider)?.readOnlyConcurrency === true;
+    overrides = { ...overrides, writeMode: effectiveMode };
+    const requirement = { workspaceRoot: record.workspaceRoot, kind: "agent" as const, agentId: record.id,
+      threadKey: record.providerSessionId ? `${record.provider}:${record.providerSessionId}` : undefined,
+      access: analysisOnly ? "read" as const : "write" as const,
+      resources: [...new Set([...(analysisOnly ? [] : this.subagents.sharedResources ?? []), ...overrides.resources ?? []])],
+      maxConcurrentAgents: this.subagents.maxConcurrentAgents ?? 2,
+      maxConcurrentReaders: this.subagents.maxConcurrentReaders ?? 2 };
+    let claim: ExecutionClaim | undefined;
+    let ticket: ExecutionTicket | undefined;
+    const waitMs = this.subagents.queueWaitMs ?? 300_000;
     try {
-      claim = this.execution.acquire({ workspaceRoot: record.workspaceRoot, kind: "agent", agentId: record.id,
-        resources: this.subagents.sharedResources, maxConcurrentAgents: this.subagents.maxConcurrentAgents ?? 1 });
+      try { claim = this.execution.acquire(requirement); }
+      catch (error) {
+        if (!(error instanceof ExecutionConflictError) || waitMs === 0) throw error;
+        ticket = this.execution.enqueue(requirement, waitMs);
+      }
     } catch (error) {
       if (error instanceof ExecutionConflictError) return Result.err(new AgentConflictError({
         code: "AGENT_CONFLICT", agentId: error.agentId, operation: "admission", retryable: true, message: error.message,
       }));
       return Result.err(new AgentStoreError("admission", error,
-        "Unable to establish an exclusive execution claim; provider was not invoked."));
+        "Unable to establish an execution claim; provider was not invoked."));
     }
 
-    const providerConfig = this.subagents.providers.find((provider) => provider.id === record.provider);
     const readOnlyDefaults = (overrides.writeMode ?? providerConfig?.writeMode) === "read_only"
       ? providerConfig?.readOnlyDefaults : undefined;
     // Resolve defaults for this turn, rather than inheriting a previous read-only turn.
@@ -294,7 +371,7 @@ export class LocalAgentManager {
       effort: overrides.effort ?? readOnlyDefaults?.effort ?? defaults?.effort,
     };
     const updated = this.store.updateResult(record.id, {
-      status: "running",
+      status: ticket ? "queued" : "running",
       model: overrides.model ?? record.model,
       effort: overrides.effort ?? record.effort,
       latestResponse: undefined,
@@ -302,12 +379,37 @@ export class LocalAgentManager {
       errorCode: undefined,
       errorRetryable: undefined,
     });
-    if (updated.isErr()) { claim.release(); return updated; }
+    if (updated.isErr()) { claim?.release(); ticket?.cancel(); return updated; }
+    const controller = new AbortController();
+    if (ticket) this.queuedTurns.set(record.id, controller);
     // Defer invocation until after the tracking entry is visible. This keeps
     // cleanup correct even if runTurn later gains a synchronous completion path.
-    const turn = Promise.resolve().then(() => (
-      this.runTurn(updated.value, prompt, overrides, workspaceId)
-    )).finally(() => claim.release());
+    const turn = Promise.resolve().then(async () => {
+      try {
+        while (!claim && ticket) {
+          if (controller.signal.aborted || !this.accepting) throw new Error("Queue cancelled before provider invocation.");
+          claim = ticket.tryAcquire();
+          if (!claim) await delay(100, undefined, { signal: controller.signal });
+        }
+        this.queuedTurns.delete(record.id);
+        if (controller.signal.aborted || !this.accepting) throw new Error("Queue cancelled before provider invocation.");
+        const running = this.store.updateResult(record.id, { status: "running" });
+        if (running.isErr()) throw running.error;
+        await this.runTurn(running.value, prompt, overrides, workspaceId, claim, analysisOnly);
+      } catch (error) {
+        const existing = this.store.getById(record.id);
+        // runTurn already persisted its own error; don't relabel it a queue failure.
+        if (existing && ["starting", "queued", "running"].includes(existing.status)) this.store.updateResult(record.id, {
+          status: controller.signal.aborted ? "stopped" : "error",
+          error: controller.signal.aborted ? "Queued turn cancelled before provider invocation." : "Execution could not leave the local queue; inspect its claim.",
+          errorCode: controller.signal.aborted ? "PROVIDER_CANCELLED" : "AGENT_CONFLICT", errorRetryable: true,
+        });
+        if (!ticket) throw error;
+      }
+    }).finally(() => {
+      this.queuedTurns.delete(record.id);
+      ticket?.cancel(); claim?.release(); this.activeTurns.delete(record.id);
+    });
     this.activeTurns.set(record.id, turn);
     void turn.catch(() => undefined);
     return updated;
@@ -318,6 +420,8 @@ export class LocalAgentManager {
     prompt: string,
     overrides: RunOverrides,
     workspaceId?: string,
+    claim?: ExecutionClaim,
+    analysisOnly = false,
   ): Promise<void> {
     const startedAt = Date.now();
     this.log("info", "agent_run_started", {
@@ -332,6 +436,12 @@ export class LocalAgentManager {
         return;
       }
       const workspaceRoot = authorized.value;
+      try { verifyHostContext(workspaceRoot, overrides.context); }
+      catch (error) {
+        this.persistRunError(record, new AgentTargetError({ code: "TARGET_RESOLUTION_FAILED", target: record.profileName,
+          retryable: false, message: error instanceof Error ? error.message : "Host context is no longer valid." }), startedAt);
+        return;
+      }
       const authorizedRecord = workspaceRoot === record.workspaceRoot
         ? record
         : { ...record, workspaceRoot };
@@ -355,6 +465,7 @@ export class LocalAgentManager {
         this.persistRunError(record, driver.error, startedAt);
         return;
       }
+      input.value.analysisOnly = analysisOnly;
       const context: LocalAgentRuntimeContext = {
         agentId: record.id,
         provider: driver.value.provider,
@@ -371,6 +482,7 @@ export class LocalAgentManager {
           if (saved.isErr()) this.log("warn", "agent_usage_persistence_failed", { agentId: record.id, errorCode: saved.error.code });
         },
         onSessionId: (providerSessionId) => {
+          claim?.bindThread(`${record.provider}:${providerSessionId}`);
           const current = this.store.getByIdResult(record.id);
           if (current.isErr()) throw current.error;
           if (!current.value || current.value.providerSessionId === providerSessionId) return;
@@ -384,11 +496,21 @@ export class LocalAgentManager {
         return;
       }
       const runResult = result.value;
+      if (analysisOnly) {
+        try { verifyHostContext(workspaceRoot, overrides.context); }
+        catch {
+          this.persistRunError(record, new AgentTargetError({ code: "TARGET_RESOLUTION_FAILED", target: record.profileName,
+            retryable: false, message: "Input changed during analysis; this conclusion is not a verified result for the current source. Refresh the host context." }), startedAt);
+          return;
+        }
+      }
       const current = this.store.getByIdResult(record.id);
       if (current.isErr()) throw current.error;
       if (!current.value) return;
       const updated = this.store.updateResult(record.id, {
         providerSessionId: runResult.providerSessionId ?? current.value.providerSessionId,
+        contextSignature: createHash("sha256").update(JSON.stringify([record.provider, input.value.model, input.value.effort,
+          input.value.writeMode, profile.value?.body ?? "", "host-first-v1"])).digest("hex"),
         status: "idle",
         latestResponse: runResult.finalResponse,
         error: undefined,
@@ -423,8 +545,6 @@ export class LocalAgentManager {
         persistenceFailed: persisted.isErr(),
       });
       throw error;
-    } finally {
-      this.activeTurns.delete(record.id);
     }
   }
 
@@ -468,9 +588,12 @@ export class LocalAgentManager {
       }));
     }
     const body = profile?.body.trim();
-    const fullPrompt = body ? `${body}\n\nTask:\n${prompt}` : prompt;
+    const stableSlot = this.drivers.get(record.provider as LocalAgentProvider)?.persistentProfileInstructions === true;
+    const taskPrompt = contextPrompt(prompt, overrides.context);
+    const fullPrompt = body && !stableSlot ? `${body}\n\nTask:\n${taskPrompt}` : taskPrompt;
     return Result.ok({
       prompt: fullPrompt,
+      profileInstructions: stableSlot ? body : undefined,
       workspaceRoot: record.workspaceRoot,
       providerSessionId: record.providerSessionId,
       writeMode: overrides.writeMode

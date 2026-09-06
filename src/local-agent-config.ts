@@ -20,6 +20,9 @@ export const subagentsConfigSchema = z.object({
   enabled: z.boolean(),
   providers: z.array(providerSchema),
   maxConcurrentAgents: z.number().int().min(1).max(16).optional(),
+  maxConcurrentReaders: z.number().int().min(1).max(8).optional(),
+  queueWaitMs: z.number().int().min(0).max(900_000).optional(),
+  maxNewSessionsPerWorkItem: z.number().int().min(1).max(16).optional(),
   sharedResources: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/)).max(16).optional(),
 }).strict().superRefine((value, context) => {
   const seen = new Set<LocalAgentProvider>();

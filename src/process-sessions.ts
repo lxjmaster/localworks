@@ -237,6 +237,14 @@ export class ProcessSessionManager {
     try { return await operation(); } finally { this.releaseClaim(claim); }
   }
 
+  /** Direct host reads are free of provider work and share a source read claim. */
+  async readWorkspace<T>(workspaceRoot: string, operation: () => Promise<T>): Promise<T> {
+    if (this.shuttingDown) throw new Error("Execution manager is shutting down.");
+    const claim = this.executionCoordinator?.acquire({ workspaceRoot, kind: "read", access: "read" });
+    if (claim) this.claims.add(claim);
+    try { return await operation(); } finally { this.releaseClaim(claim); }
+  }
+
   private releaseClaim(claim?: ExecutionClaim): void {
     if (claim) { claim.release(); this.claims.delete(claim); }
     if (this.shuttingDown && this.claims.size === 0) this.executionCoordinator?.close();

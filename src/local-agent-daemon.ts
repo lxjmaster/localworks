@@ -53,6 +53,7 @@ export interface LocalAgentDaemonManager {
   continue(agentId: string, prompt: string, overrides: RunOverrides | undefined, scope: LocalAgentWorkspaceScope): Promise<Result<LocalAgentRecord, AgentContinueError>>;
   get(agentId: string, scope: LocalAgentWorkspaceScope): Result<LocalAgentRecord, AgentLookupError>;
   list(scope: LocalAgentWorkspaceScope): Result<LocalAgentRecord[], AgentListError>;
+  cancelQueued?(agentId: string, scope: LocalAgentWorkspaceScope): Result<LocalAgentRecord, AgentContinueError>;
   evictIdle(now?: number): Promise<void>;
   close(): Promise<void>;
   readonly activeTurnCount: number;
@@ -305,6 +306,9 @@ export class LocalAgentDaemon {
         ));
       case "agent.get":
         return unwrapManagerResult(this.manager.get(request.params.id, request.params.scope));
+      case "agent.cancelQueued":
+        if (!this.manager.cancelQueued) throw new LocalAgentDaemonProtocolError("INVALID_REQUEST", "Queued cancellation is unavailable.");
+        return unwrapManagerResult(this.manager.cancelQueued(request.params.id, request.params.scope));
       case "agent.list":
         return unwrapManagerResult(this.manager.list(request.params));
       case "daemon.status":

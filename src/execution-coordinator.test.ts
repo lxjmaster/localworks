@@ -38,13 +38,25 @@ test("canonical checkout covers nested directories and aliases", (t) => {
   claim.release();
 });
 
-test("global default is one; explicit independent checkout budget is bounded", (t) => {
-  const { a, b, first, second } = fixture(t);
+test("global default is two; explicit serial and total limits remain bounded", (t) => {
+  const { root, a, b, first, second } = fixture(t);
   const claim = first.acquire({ workspaceRoot: a, kind: "agent" });
-  assert.throws(() => second.acquire({ workspaceRoot: b, kind: "agent" }), ExecutionConflictError);
-  second.acquire({ workspaceRoot: b, kind: "agent", maxConcurrentAgents: 2 }).release();
+  assert.throws(() => second.acquire({ workspaceRoot: b, kind: "agent", maxConcurrentAgents: 1 }), ExecutionConflictError);
+  const another = second.acquire({ workspaceRoot: b, kind: "agent" });
+  const c = join(root, "c"); mkdirSync(join(c, ".git"), { recursive: true });
+  assert.throws(() => second.acquire({ workspaceRoot: c, kind: "agent" }), ExecutionConflictError);
+  another.release();
   assert.throws(() => second.acquire({ workspaceRoot: b, kind: "agent", maxConcurrentAgents: 0 }));
   claim.release();
+});
+
+test("read claims still enforce provider thread ownership and explicit resource exclusion", (t) => {
+  const { a, b, first, second } = fixture(t);
+  const claim = first.acquire({ workspaceRoot: a, kind: "agent", access: "read", agentId: "a", threadKey: "codex:shared" });
+  assert.throws(() => second.acquire({ workspaceRoot: a, kind: "agent", access: "read", agentId: "b", threadKey: "codex:shared" }), ExecutionConflictError);
+  const other = second.acquire({ workspaceRoot: b, kind: "agent", access: "read", agentId: "b" });
+  assert.throws(() => other.bindThread("codex:shared"), ExecutionConflictError);
+  other.release(); claim.release();
 });
 
 test("explicit shared build resources exclude independent worktrees", (t) => {

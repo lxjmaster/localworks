@@ -130,10 +130,31 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
             message: "Codex app-server is not running.",
           });
         }
+        let threadConfig: Record<string, unknown> = {};
+        let developerInstructions: string | undefined;
+        if (input.analysisOnly || input.profileInstructions) {
+          // Pure configuration RPC: no model request and no global config mutation.
+          const settings = await this.rpc.request("config/read", { cwd: input.workspaceRoot, includeLayers: true });
+          const effective = asRecord(asRecord(settings)?.config);
+          if (!effective) throw new Error("Cannot verify effective Codex configuration; refusing to start a paid turn.");
+          if (input.analysisOnly) threadConfig = restrictedAnalysisConfig(settings);
+          if (input.profileInstructions) developerInstructions = [
+            typeof effective.developer_instructions === "string" ? effective.developer_instructions : undefined,
+            input.profileInstructions,
+          ].filter(Boolean).join("\n\n");
+        }
         const threadResponse = await this.rpc.request(
           input.providerSessionId ? "thread/resume" : "thread/start",
-          threadParams(input),
+          { ...threadParams(input), config: { "features.multi_agent": false, "features.multi_agent_v2": false, ...threadConfig },
+            ...(developerInstructions ? { developerInstructions } : {}) },
         );
+        if (input.analysisOnly) {
+          const opened = asRecord(threadResponse);
+          const sandbox = asRecord(opened?.sandbox);
+          if (opened?.approvalPolicy !== "never" || sandbox?.type !== "readOnly" || sandbox.networkAccess === true) {
+            throw new Error("Codex did not confirm the required offline read-only sandbox; no analysis turn started.");
+          }
+        }
         const threadId = readString(asRecord(threadResponse)?.thread, "id");
         if (!threadId) {
           throw new AgentProviderProtocolError({
@@ -235,6 +256,8 @@ async function waitForProcessExit(
 }
 
 export class CodexLocalAgentDriver implements LocalAgentDriver {
+  readonly readOnlyConcurrency = true;
+  readonly persistentProfileInstructions = true;
   readonly provider = "codex" as const;
   readonly idleTimeoutMs = 5 * 60_000;
 
@@ -473,6 +496,37 @@ class CodexAppServerRpc {
   }
 }
 
+/** Thread-local restrictions; never edit the user's config or expose its credential values. */
+export function restrictedAnalysisConfig(settings: unknown): Record<string, unknown> {
+  const root = asRecord(settings);
+  const effective = asRecord(root?.config);
+  if (!effective) throw new Error("Effective configuration is unavailable for read-only analysis.");
+  const result: Record<string, unknown> = {
+    "features.multi_agent": false, "features.multi_agent_v2": false,
+    "features.apps": false, "features.plugins": false,
+    "features.remote_plugin": false, "web_search": "disabled",
+    "apps._default.enabled": false,
+  };
+  const configs = [effective, ...(Array.isArray(root?.layers) ? root.layers.map((layer) => asRecord(asRecord(layer)?.config)) : [])];
+  for (const config of configs) {
+    if (!config) continue;
+    for (const table of ["mcp_servers", "apps", "plugins"]) {
+      // Effective-config responses encode some absent optional tables as null.
+      if (config[table] === undefined || config[table] === null) continue;
+      const entries = asRecord(config[table]);
+      if (!entries) throw new Error("Cannot safely interpret external tools configuration for shared analysis.");
+      for (const name of Object.keys(entries)) {
+        // Fail closed rather than invent dotted-key quoting unsupported by an installed provider.
+        // Unicode server names and plugin@market identities are literal path segments.
+        // Dots/quotes remain rejected: dotted override parsers differ across Codex versions.
+        if (!/^[\p{L}\p{N}_@:/-]{1,256}$/u.test(name)) throw new Error("External tool identifier needs an explicitly supported read-only adapter.");
+        result[`${table}.${name}.enabled`] = false;
+      }
+    }
+  }
+  return result;
+}
+
 function threadParams(input: LocalAgentRunInput): Record<string, unknown> {
   return {
     ...(input.providerSessionId ? { threadId: input.providerSessionId } : {}),
@@ -491,7 +545,7 @@ function turnParams(input: LocalAgentRunInput, threadId: string): Record<string,
     threadId,
     input: [{ type: "text", text: input.prompt }],
     approvalPolicy: "never",
-    sandboxPolicy: sandboxPolicyFor(input.writeMode),
+    sandboxPolicy: input.analysisOnly ? { type: "readOnly", networkAccess: false } : sandboxPolicyFor(input.writeMode),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
   };

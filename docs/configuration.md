@@ -83,12 +83,13 @@ rejected so spelling mistakes cannot silently alter behavior.
 
 | Value | Tool surface |
 | --- | --- |
-| `codex` | Default. `open_workspace`, `read`, `agent_task`, `apply_patch`, `exec_command`, `write_stdin`, and `show_changes`. |
-| `claude` | `open_workspace`, `read`, `agent_task`, `write`, `edit`, `bash`, and `show_changes`. |
+| `codex` | Default. `open_workspace`, `read`, `workspace_context`, `agent_task`, `apply_patch`, `exec_command`, `write_stdin`, and `show_changes`. |
+| `claude` | `open_workspace`, `read`, `workspace_context`, `agent_task`, `write`, `edit`, `bash`, and `show_changes`. |
 
-The dedicated MCP tools `grep`, `glob`, and `ls` are not exposed. Each mode uses
-its shell tool with programs such as `rg`, `find`, and `ls` when it needs those
-operations.
+The dedicated tools `grep`, `glob`, and `ls` are not exposed. `workspace_context`
+provides nonrecursive listing and literal search/capture over selected files without
+a shell or model. Use the shell for more specialized operations; unknown shell effects
+remain exclusive even when a command is intended only for inspection.
 
 DevSpace attaches Apps UI metadata only to `open_workspace` and `show_changes`.
 This avoids rendering an iframe for every read, edit, search, or command call.
@@ -137,15 +138,21 @@ persist provider credentials.
 
 ### Codex efficiency and execution coordination
 
-The default is **one active managed agent globally**, and always one active operation per real checkout. The optional `subagents.maxConcurrentAgents` accepts 1–16; increasing it permits independent checkouts/worktrees, not competing writers in the same checkout. Read-only agent turns are also serialized by default because separate contexts still incur provider work. Prefer `agent_task` with `action=continue` for related work rather than starting one agent per file.
+Prefer direct host inspection with `read`/`workspace_context`. These do not invoke a provider and do not occupy Codex slots. Delegate only work requiring additional reasoning or implementation; passing a host summary still consumes some worker input tokens, so keep it relevant and versioned rather than copying the entire host trajectory.
 
-`subagents.sharedResources` optionally declares up to 16 exclusive resource keys for agent turns. Managed `exec_command` accepts matching `resources` for shared build outputs or devices across worktrees. Every participating process must use the same DevSpace state directory and the same key. This is cooperative admission, **not an OS sandbox**; arbitrary terminals, externally daemonized child processes, and uncoordinated tools are outside this guarantee.
+Defaults are **two active managed agents globally**, at most **two verified readers per checkout**, and **one exclusive writer**. `subagents.maxConcurrentAgents` accepts 1–16, `maxConcurrentReaders` 1–8, `queueWaitMs` 0–900000 (default 300000), and `maxNewSessionsPerWorkItem` 1–16 (default 3). Explicit `maxConcurrentAgents: 1` remains serial; `queueWaitMs: 0` restores immediate conflict responses. Slots count active model tasks, not idle persisted sessions or direct host reads. Compatible readers share one source claim; writes, unknown-effect commands and validation builds remain exclusive. Other providers without a certified shared-analysis adapter stay exclusive even when labeled read-only.
 
-Managed file writes, patches and shell commands exclude agent turns in the checkout. Use the native `agent_task` control plane to start/observe workers without acquiring a shell claim. Shell-wrapped `devspace agents run` is deliberately rejected when its parent shell holds that checkout; direct terminal CLI remains supported. A native start requires a stable `taskKey`. Identical starts reuse the stored agent without executing another turn; changed instructions use `continue`. The terminal equivalent is `devspace agents run codex --task-key issue-17 "bounded task" --json`. A denied initial task remains stopped and can be explicitly continued after the conflict is resolved; retries do not automatically replay it.
+`subagents.sharedResources` optionally declares up to 16 exclusive resources for non-analysis turns. Pure analysis must not use build outputs/devices; explicit task `resources` are always exclusive. Managed `exec_command` accepts matching resources across worktrees. Every participant must use the same state directory and resource keys. This is cooperative admission, **not an OS sandbox**; external editors, terminals and independently daemonized children are outside its guarantee. Existing claims migrate as exclusive. Queued waiters expire or can be cancelled; active claims are never stolen by elapsed time or a missing PID.
 
-`agent_task` provides `start`, `continue`, `observe`, `list`, `claims`, and `usage`. Observe uses bounded local waiting (`waitMs`, maximum 25 seconds), `knownRevision` to avoid duplicate delivery, and `includeResponse=true` to retrieve the full response. Usage is provider-reported metadata with unknown values preserved; cumulative totals are never summed. Cached input and reasoning output are breakdowns, not extra charges. Managed Codex threads pass `features.multi_agent=false` on start/resume so that native child-agent fanout does not bypass the host's admission policy. Global Codex configuration is not rewritten.
+Excess work waits locally without starting a provider; a queued writer blocks later readers of the same source. Each agent/thread has only one active or queued turn. Native start requires `taskKey` and `workItemId`; optional `contextKey` reuses an idle related session under matching model/effort/permissions/profile, while `freshContext` retains independent-review capability. Request replay and session affinity are distinct. Native continue requires `requestKey`; identical retries do not perform paid work again and changed payloads under the same key are rejected. The CLI adds `--work-item`, `--context-key`, `--fresh-context` and `--request-key`; its old no-key syntax remains compatible but cannot deduplicate a client retry. Native control avoids a parent shell holding the very source claim it wants to delegate.
 
-Claims survive owner interruption and are never stolen merely because time elapsed or a PID disappeared: children or external side effects may still exist. `action=claims` shows scoped reconciliation information. Automatic orphan recovery and non-idempotent command replay are not implemented. Daemon protocol version 4 prevents an older daemon from silently ignoring these guarantees. Use the normal controlled upgrade/reconnect flow after active work has settled; do not replace a running server's build directory mid-task. See [implementation and verification](codex-efficiency-implementation.md).
+`agent_task` provides start/continue/observe/list/claims/usage/cancelQueued. Observe locally waits up to 25 seconds with revision deduplication; full response expansion is explicit. Usage retains provider snapshots and unknowns, not a fabricated invoice. Queued tasks can be cancelled before invocation. Running-task cancellation, orphan reconciliation, automatic immutable snapshots, fork and cache-affinity experiments are not implemented by this phase.
+
+`workspace_context` returns explicit file ranges, full-file hashes and refs. Pass host-selected facts and refs as `agent_task.context = {summary, files}`. At most 24 files, 512 KiB per file and 4 MiB in total are accepted; ranges are bounded to 500 output lines overall. The hash is for the whole referenced file, not just its displayed range. Ref validation occurs after queueing and again after read-only analysis. External edits invalidate covered results, but undeclared dependencies are not automatically tracked. Capture is not a persistent immutable snapshot.
+
+The Codex shared-analysis adapter uses thread-local read-only/network restrictions, disables configured MCP/apps/plugins and native nested fanout, and checks the returned sandbox before turn/start. Null optional tables and Unicode/plugin@market names are supported; ambiguous dotted/quoted identifiers fail closed until their installed-provider semantics are supported. Profile rules use a stable developer-instruction slot while preserving configured global instructions, rather than being appended to every new user prompt. Applicable AGENTS.md rules are not removed. No global Codex configuration is rewritten and cache hits are not guaranteed.
+
+Daemon protocol version **5** prevents an older daemon from ignoring queued states or context/request fields. An interrupted queued task is marked for review on restart, not automatically replayed; no prompt body is stored in waiter metadata. Use the controlled upgrade/reconnect flow after active work has settled; do not replace a running server's dist mid-task. See [phase-two implementation and verification](host-first-readonly-workflows.md); the [phase-one record](codex-efficiency-implementation.md) is historical and its blanket read exclusivity is superseded.
 
 ## Native artifact download
 

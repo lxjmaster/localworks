@@ -1,7 +1,7 @@
 import type { LocalAgentCatalog } from "./local-agent-catalog.js";
 import type { LocalAgentRecord, LocalAgentStatus } from "./local-agent-store.js";
 
-export type AgentCommandStatus = "running" | "completed" | "failed" | "stopped";
+export type AgentCommandStatus = "queued" | "running" | "completed" | "failed" | "stopped";
 
 export type AgentTargetOutput =
   | {
@@ -39,6 +39,7 @@ export interface AgentFailureOutput {
 }
 
 export type AgentObservationOutput =
+  | { id: string; status: "queued" }
   | { id: string; status: "running" }
   | { id: string; status: "completed"; response?: string }
   | { id: string; status: "failed"; error: AgentFailureOutput }
@@ -94,6 +95,8 @@ export function presentAgentObservation(record: LocalAgentRecord): AgentObservat
       };
     case "running":
       return { id: receipt.id, status: "running" };
+    case "queued":
+      return { id: receipt.id, status: "queued" };
   }
 }
 
@@ -133,6 +136,8 @@ export function formatAgentObservation(observation: AgentObservationOutput): str
 
 function presentAgentStatus(status: LocalAgentStatus): AgentCommandStatus {
   switch (status) {
+    case "queued":
+      return "queued";
     case "starting":
     case "running":
       return "running";

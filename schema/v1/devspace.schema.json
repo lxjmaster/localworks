@@ -228,6 +228,21 @@
           "minimum": 1,
           "maximum": 16
         },
+        "maxConcurrentReaders": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "queueWaitMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 900000
+        },
+        "maxNewSessionsPerWorkItem": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
         "sharedResources": {
           "maxItems": 16,
           "type": "array",

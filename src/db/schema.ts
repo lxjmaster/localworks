@@ -101,6 +101,9 @@ export const localAgentSessions = sqliteTable(
     model: text("model"),
     effort: text("effort"),
     providerSessionId: text("provider_session_id"),
+    contextKey: text("context_key"),
+    contextSignature: text("context_signature"),
+    workItemId: text("work_item_id"),
     status: text("status").notNull(),
     latestResponse: text("latest_response"),
     error: text("error"),
@@ -113,6 +116,7 @@ export const localAgentSessions = sqliteTable(
     index("local_agent_sessions_workspace_id_idx").on(table.workspaceId, table.updatedAt),
     index("local_agent_sessions_workspace_root_idx").on(table.workspaceRoot, table.updatedAt),
     index("local_agent_sessions_provider_session_id_idx").on(table.providerSessionId),
+    index("agent_context_affinity").on(table.workspaceRoot, table.workspaceId, table.profileName, table.workItemId, table.contextKey, table.contextSignature),
   ],
 );
 
@@ -132,9 +136,24 @@ export const executionClaims = sqliteTable("execution_claims", {
   kind: text("kind").notNull(),
   checkoutRoot: text("checkout_root").notNull(),
   agentId: text("agent_id"),
+  accessMode: text("access_mode").notNull().default("write"),
+  threadKey: text("thread_key"),
   resources: text("resources").notNull(),
   acquiredAt: text("acquired_at").notNull(),
 });
+
+export const executionWaiters = sqliteTable("execution_waiters", {
+  sequence: integer("sequence").primaryKey({ autoIncrement: true }),
+  id: text("id").notNull().unique(), ownerId: text("owner_id").notNull(), ownerPid: integer("owner_pid").notNull(),
+  kind: text("kind").notNull(), checkoutRoot: text("checkout_root").notNull(), agentId: text("agent_id"),
+  threadKey: text("thread_key"), accessMode: text("access_mode").notNull(), resources: text("resources").notNull(),
+  expiresAtMs: integer("expires_at_ms").notNull(),
+}, (table) => [index("execution_waiters_order").on(table.sequence)]);
+
+export const agentContinueKeys = sqliteTable("agent_continue_keys", {
+  agentId: text("agent_id").notNull().references(() => localAgentSessions.id, { onDelete: "cascade" }),
+  requestKey: text("request_key").notNull(), requestHash: text("request_hash").notNull(),
+}, (table) => [primaryKey({ columns: [table.agentId, table.requestKey] })]);
 
 export const agentTaskKeys = sqliteTable("agent_task_keys", {
   workspaceRoot: text("workspace_root").notNull(),

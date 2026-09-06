@@ -53,7 +53,9 @@ test("native MCP control observes an occupied checkout without shell claims and 
   };
   const absent = await call({ action: "start", target: "codex", prompt: "work" });
   assert.equal(absent.isError, true); assert.equal(starts.length, 0);
-  await call({ action: "start", target: "codex", prompt: "work", taskKey: "task-1", readOnly: true });
+  assert.equal((await call({ action: "start", target: "codex", prompt: "work", taskKey: "task-1" })).isError, true);
+  assert.equal(starts.length, 0, "Native work must identify a work item for the context budget");
+  await call({ action: "start", target: "codex", prompt: "work", taskKey: "task-1", workItemId: "work-1", readOnly: true });
   assert.equal(starts[0]?.taskKey, "task-1"); assert.equal(starts[0]?.writeMode, "read_only");
   const initial = await call({ action: "observe", agentId: record.id, waitMs: 0 });
   assert.equal(initial.status, "running");

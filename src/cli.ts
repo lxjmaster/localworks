@@ -411,8 +411,8 @@ function printHelp(): void {
       "  devspace config set publicBaseUrl <url|null>",
       "  devspace show-changes <review-ref> [--json]",
       "  devspace agents ls       List subagent sessions",
-      "  devspace agents run <profile-or-provider> [--task-key <key>] [--read-only] [--model <model>] [--effort <level>] <prompt>",
-      "  devspace agents continue <id> [--read-only] [--model <model>] [--effort <level>] <prompt>",
+      "  devspace agents run <target> [--task-key <key>] [--work-item <id>] [--context-key <domain>] [--fresh-context] [--read-only] [--model <model>] [--effort <level>] <prompt>",
+      "  devspace agents continue <id> [--request-key <key>] [--read-only] [--model <model>] [--effort <level>] <prompt>",
       "  devspace agents show <id>",
       "  devspace agents daemon <status|stop|logs>",
       "  devspace -v, --version   Print the installed version",
@@ -523,6 +523,9 @@ async function runAgentsRun(args: string[], json: boolean): Promise<void> {
     target: parsed.target,
     prompt: parsed.prompt,
     taskKey: parsed.taskKey,
+    workItemId: parsed.workItemId,
+    contextKey: parsed.contextKey,
+    freshContext: parsed.freshContext,
     workspaceRoot: scope.workspaceRoot,
     workspaceId: scope.workspaceId,
     model: parsed.model,
@@ -545,6 +548,7 @@ async function runAgentsContinue(args: string[], json: boolean): Promise<void> {
   const client = createLocalAgentClient(config);
   const scope = resolveCliWorkspaceContext(config.allowedRoots);
   const result = await client.continue(parsed.agentId, parsed.prompt, {
+    requestKey: parsed.requestKey,
     model: parsed.model,
     effort: parsed.effort,
     writeMode: parsed.writeMode,
@@ -571,7 +575,7 @@ async function runAgentsShow(args: string[], json: boolean): Promise<void> {
   if (!record) return;
 
   const deadline = Date.now() + 15_000;
-  while ((record.status === "starting" || record.status === "running") && Date.now() < deadline) {
+  while ((record.status === "starting" || record.status === "queued" || record.status === "running") && Date.now() < deadline) {
     await sleep(500);
     const refreshed = presentAgentResult(await client.get(id, scope), json);
     if (!refreshed) return;
@@ -661,8 +665,8 @@ function printAgentsHelp(): void {
       "",
       "Usage:",
       "  devspace agents ls [--json]",
-      "  devspace agents run <profile-or-provider> [--task-key <key>] [--read-only] [--model <model>] [--effort <level>] [--json] <prompt>",
-      "  devspace agents continue <id> [--read-only] [--model <model>] [--effort <level>] [--json] <prompt>",
+      "  devspace agents run <target> [--task-key <key>] [--work-item <id>] [--context-key <domain>] [--fresh-context] [--read-only] [--model <model>] [--effort <level>] [--json] <prompt>",
+      "  devspace agents continue <id> [--request-key <key>] [--read-only] [--model <model>] [--effort <level>] [--json] <prompt>",
       "  devspace agents show <id> [--json]",
       "  devspace agents targets [--json]",
       "  devspace agents daemon <status|stop|logs> [--json]",

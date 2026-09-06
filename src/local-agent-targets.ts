@@ -13,6 +13,10 @@ export interface ParsedLocalAgentRunArgs {
   effort?: string;
   writeMode?: "read_only";
   taskKey?: string;
+  workItemId?: string;
+  contextKey?: string;
+  freshContext?: boolean;
+  requestKey?: string;
 }
 
 export interface ParsedLocalAgentContinueArgs {
@@ -21,6 +25,7 @@ export interface ParsedLocalAgentContinueArgs {
   model?: string;
   effort?: string;
   writeMode?: "read_only";
+  requestKey?: string;
 }
 
 export type LocalAgentTarget =
@@ -45,6 +50,7 @@ export function parseLocalAgentRunArgs(args: string[]): ParsedLocalAgentRunArgs 
     args,
     'Usage: devspace agents run <profile-or-provider> [--task-key <key>] [--read-only] [--model <model>] [--effort <level>] "<prompt>"',
   );
+  if (parsed.requestKey) throw new Error("--request-key is for continue; use --task-key for an initial run.");
   return parsed;
 }
 
@@ -54,7 +60,9 @@ export function parseLocalAgentContinueArgs(args: string[]): ParsedLocalAgentCon
     'Usage: devspace agents continue <id> [--read-only] [--model <model>] [--effort <level>] "<prompt>"',
   );
   if (parsed.taskKey) throw new Error("--task-key is for an initial run; continue already identifies the existing agent.");
-  return { agentId: parsed.target, prompt: parsed.prompt, model: parsed.model, effort: parsed.effort, ...(parsed.writeMode ? { writeMode: parsed.writeMode } : {}) };
+  if (parsed.workItemId || parsed.contextKey || parsed.freshContext) throw new Error("Session affinity is selected by run; continue already identifies a session.");
+  return { agentId: parsed.target, prompt: parsed.prompt, model: parsed.model, effort: parsed.effort,
+    ...(parsed.requestKey ? { requestKey: parsed.requestKey } : {}), ...(parsed.writeMode ? { writeMode: parsed.writeMode } : {}) };
 }
 
 function parseAgentPromptArgs(
@@ -70,6 +78,7 @@ function parseAgentPromptArgs(
   let effort: string | undefined;
   let writeMode: "read_only" | undefined;
   let taskKey: string | undefined;
+  const context: Pick<ParsedLocalAgentRunArgs, "workItemId" | "contextKey" | "freshContext" | "requestKey"> = {};
   const promptParts: string[] = [];
   let optionsEnded = false;
   for (let index = 0; index < rest.length; index += 1) {
@@ -84,6 +93,15 @@ function parseAgentPromptArgs(
     }
     if (part === "--read-only") {
       writeMode = "read_only";
+      continue;
+    }
+    if (part === "--fresh-context") { context.freshContext = true; continue; }
+    const contextOptions = { "--work-item": "workItemId", "--context-key": "contextKey", "--request-key": "requestKey" } as const;
+    const contextOption = Object.keys(contextOptions).find((option) => part === option || part?.startsWith(`${option}=`)) as keyof typeof contextOptions | undefined;
+    if (contextOption) {
+      const value = parseOptionValue(part === contextOption ? rest[++index] : part!.slice(contextOption.length + 1), contextOption);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(value) || (contextOption === "--request-key" && value.includes("/"))) throw new Error("Invalid context or request key.");
+      context[contextOptions[contextOption]] = value;
       continue;
     }
     if (part === "--task-key" || part?.startsWith("--task-key=")) {
@@ -124,7 +142,7 @@ function parseAgentPromptArgs(
     throw new Error(usage);
   }
 
-  return { target, prompt, model, effort, ...(writeMode ? { writeMode } : {}), ...(taskKey ? { taskKey } : {}) };
+  return { target, prompt, model, effort, ...context, ...(writeMode ? { writeMode } : {}), ...(taskKey ? { taskKey } : {}) };
 }
 
 function parseOptionValue(value: string | undefined, option: string): string {

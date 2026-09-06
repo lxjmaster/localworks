@@ -57,7 +57,7 @@ const RETRY_DELAY_MS = 40;
 
 type RequestError<M extends LocalAgentDaemonRequest["method"]> =
   M extends "agent.start" ? AgentStartError | AgentDaemonError
-    : M extends "agent.continue" ? AgentContinueError | AgentDaemonError
+    : M extends "agent.continue" | "agent.cancelQueued" ? AgentContinueError | AgentDaemonError
       : M extends "agent.get" ? AgentLookupError | AgentDaemonError
         : M extends "agent.list" ? AgentListError | AgentDaemonError
           : AgentDaemonError;
@@ -125,6 +125,11 @@ export class LocalAgentClient {
   ): Promise<BetterResult<LocalAgentRecord, AgentLookupError | AgentDaemonError>> {
     const result = await this.request("agent.get", { id: agentId, scope });
     return decodeRequestResult(result, "agent.get", decodeAgentRecord);
+  }
+
+  async cancelQueued(agentId: string, scope: LocalAgentWorkspaceScope): Promise<BetterResult<LocalAgentRecord, AgentContinueError | AgentDaemonError>> {
+    const result = await this.request("agent.cancelQueued", { id: agentId, scope });
+    return decodeRequestResult(result, "agent.cancelQueued", decodeAgentRecord);
   }
 
   async list(
@@ -594,6 +599,7 @@ function isRequestError(
   switch (method) {
     case "agent.start":
     case "agent.continue":
+    case "agent.cancelQueued":
       return category === "target"
         || category === "scope"
         || category === "conflict"

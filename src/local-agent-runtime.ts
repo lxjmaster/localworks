@@ -14,6 +14,10 @@ export interface LocalAgentRunInput {
   effort?: string;
   modelOverrideRequested?: boolean;
   effortOverrideRequested?: boolean;
+  /** Adapter-owned strict static-analysis policy; never just a prompt assertion. */
+  analysisOnly?: boolean;
+  /** Stable profile slot, separate from each new user task. */
+  profileInstructions?: string;
 }
 
 export interface LocalAgentRunResult {
@@ -62,6 +66,8 @@ export interface LocalAgentRuntime {
 
 export interface LocalAgentDriver {
   readonly provider: LocalAgentProvider;
+  readonly readOnlyConcurrency?: boolean;
+  readonly persistentProfileInstructions?: boolean;
   runtimeKey(context: LocalAgentRuntimeContext): string;
   createRuntime(context: LocalAgentRuntimeContext): Promise<Result<LocalAgentRuntime, AgentProviderError>>;
   readonly idleTimeoutMs?: number;

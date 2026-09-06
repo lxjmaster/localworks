@@ -18,7 +18,7 @@ import {
 
 type CodexRegistration = (context: ToolRegistrationContext) => void;
 
-const CODEX_INSTRUCTIONS = `Use ${toolNames.read} for direct file reads, apply_patch for file modifications, exec_command for commands, and write_stdin for running processes. Use agent_task (not shell-wrapped agents commands) to start/continue/observe subagents. Prefer continuing one agent for related work. Managed commands, mutations and agent turns exclude each other in the same checkout; do not bypass a conflict using a different path. Declare shared build/device resources across worktrees. Commands still have the local user's authority, not an OS sandbox. Follow workspace instructions and applicable skills.`;
+const CODEX_INSTRUCTIONS = `Read project context directly as the host with ${toolNames.read} or workspace_context before deciding to delegate. Those tools do not invoke Codex. Do not start a worker just to browse directories, summarize known logs or wait. Use apply_patch for file modifications, exec_command for commands, and write_stdin for running processes. Use agent_task (not shell wrappers) for subagent control. Provide only relevant host-prepared evidence, continue related sessions, and use a separate context when independent review is needed. Verified readers share bounded source access; mutations and unknown-effect commands remain exclusive. Declare shared build/device resources across worktrees. Never bypass claims using another path or state directory. Shell commands still have local-user authority, not an OS sandbox. Follow workspace instructions and applicable skills.`;
 
 export function codexInstructions(): string {
   return CODEX_INSTRUCTIONS;
