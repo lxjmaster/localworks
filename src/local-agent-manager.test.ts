@@ -41,7 +41,7 @@ const disabledProfile: LocalAgentProfile = {
 const subagents: SubagentsConfig = {
   enabled: true,
   providers: [
-    { id: "codex", enabled: true, model: "gpt-default", effort: "medium" },
+    { id: "codex", enabled: true, model: "gpt-default", effort: "medium", writeMode: "full_access", readOnlyDefaults: { model: "gpt-read", effort: "low" } },
     { id: "claude", enabled: true },
   ],
 };
@@ -233,6 +233,7 @@ assert.equal(first.status, "running");
 assert.equal(first.model, "gpt-default");
 assert.equal(first.effort, "medium");
 await waitFor(() => runtimes.get(first.id)?.inputs.length === 1);
+assert.equal(runtimes.get(first.id)!.inputs[0].writeMode, "full_access");
 const conflict = await manager.continue(first.id, "another prompt", {}, scope);
 assert.equal(conflict.isErr(), true);
 if (conflict.isErr()) {
@@ -246,6 +247,7 @@ assert.equal(getRecord(first.id).providerSessionId, "thread_test");
 assert.match(getRecord(first.id).latestResponse ?? "", /Task:\nhold/);
 
 const continued = unwrap(await manager.continue(first.id, "continue", {
+  writeMode: "read_only",
   model: "gpt-run",
   effort: "high",
 }, scope));
@@ -253,6 +255,17 @@ assert.equal(continued.status, "running");
 await waitFor(() => getRecord(first.id).status === "idle");
 assert.equal(getRecord(first.id).model, "gpt-run");
 assert.equal(getRecord(first.id).effort, "high");
+assert.equal(runtimes.get(first.id)!.inputs.at(-1)!.writeMode, "read_only");
+
+const readonlyAgent = unwrap(await manager.start({
+  target: "codex", prompt: "inspect only", ...scope, writeMode: "read_only",
+}));
+await waitFor(() => getRecord(readonlyAgent.id).status === "idle");
+assert.equal(getRecord(readonlyAgent.id).model, "gpt-read");
+assert.equal(getRecord(readonlyAgent.id).effort, "low");
+assert.equal(runtimes.get(readonlyAgent.id)!.inputs[0]!.writeMode, "read_only");
+assert.equal(runtimes.get(readonlyAgent.id)!.inputs[0]!.effort, "low");
+assert.equal(runtimes.get(first.id)!.inputs.at(-1)!.effort, "high");
 
 const second = unwrap(await manager.start({
   target: "reviewer",
@@ -262,7 +275,7 @@ const second = unwrap(await manager.start({
 }));
 await waitFor(() => getRecord(second.id).status === "idle");
 assert.notEqual(first.id, second.id);
-assert.equal(runtimes.size, 2, "different agents receive independent logical runtimes");
+assert.equal(runtimes.size, 3, "different agents receive independent logical runtimes");
 
 const failed = unwrap(await manager.start({
   target: "reviewer",

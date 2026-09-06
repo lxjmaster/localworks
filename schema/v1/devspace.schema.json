@@ -192,6 +192,28 @@
               "effort": {
                 "type": "string",
                 "minLength": 1
+              },
+              "writeMode": {
+                "type": "string",
+                "enum": [
+                  "read_only",
+                  "allowed",
+                  "full_access"
+                ]
+              },
+              "readOnlyDefaults": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "effort": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [
@@ -254,6 +276,15 @@
       "default": {},
       "type": "object",
       "properties": {
+        "resourceAliases": {
+          "default": [],
+          "description": "Exact additional OAuth resource URLs representing this MCP server, such as a user-owned tunnel endpoint.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
         "accessTokenTtlSeconds": {
           "default": 3600,
           "type": "integer",

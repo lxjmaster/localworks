@@ -25,6 +25,7 @@ try {
   testExpiredTokenCleanup(join(root, "expiration"));
   testTransactionalTokenRotation(join(root, "rotation"));
   await testProviderRestartRotationAndRevocation(join(root, "provider"));
+  await testResourceAliases(join(root, "aliases"));
 } finally {
   await rm(root, { recursive: true, force: true });
 }
@@ -249,4 +250,32 @@ async function testProviderRestartRotationAndRevocation(stateDir: string): Promi
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
+}
+
+async function testResourceAliases(stateDir: string): Promise<void> {
+  const alias = new URL("https://tunnel.example.com/v1/mcp/tunnel-owned");
+  const provider = new SingleUserOAuthProvider({ ...oauthConfig, resourceAliases: [alias.href] }, mcpUrl, stateDir);
+  try {
+    const client = await provider.clientsStore.registerClient?.({redirect_uris: [redirectUri]});
+    assert.ok(client);
+    let location = "";
+    const response = {
+      req: {method: "POST", body: {owner_token: oauthConfig.ownerToken}},
+      redirect: (_status: number, url: string) => { location = url; },
+    } as unknown as Parameters<SingleUserOAuthProvider["authorize"]>[2];
+    const params = {redirectUri, codeChallenge: "challenge", scopes: ["devspace"], resource: alias};
+    for (const resource of [undefined, new URL(alias.href + "/child"), new URL("https://tunnel.example.com/v1/mcp/tunnel-other")]) {
+      await assert.rejects(provider.authorize(client, {...params, resource}, response), /Invalid or missing OAuth resource/);
+    }
+    await provider.authorize(client, params, response);
+    const code = new URL(location).searchParams.get("code");
+    assert.ok(code);
+    await assert.rejects(provider.exchangeAuthorizationCode(client, code, undefined, redirectUri, new URL(alias.href + "/child")), /Invalid resource/);
+    const tokens = await provider.exchangeAuthorizationCode(client, code, undefined, redirectUri, alias);
+    assert.equal((await provider.verifyAccessToken(tokens.access_token)).resource?.href, alias.href);
+    assert.ok(tokens.refresh_token);
+    await assert.rejects(provider.exchangeRefreshToken(client, tokens.refresh_token, undefined, new URL(alias.href + "/child")), /Invalid resource/);
+    const refreshed = await provider.exchangeRefreshToken(client, tokens.refresh_token, undefined, alias);
+    assert.equal((await provider.verifyAccessToken(refreshed.access_token)).resource?.href, alias.href);
+  } finally { provider.close(); }
 }

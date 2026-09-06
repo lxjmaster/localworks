@@ -146,3 +146,5 @@ assert.deepEqual(parseLocalAgentRunArgs(["codex", "--", "--json", "literal"]), {
 }
 
 assert.equal(resolveLocalAgentTarget("missing", profiles), undefined);
+assert.equal(parseLocalAgentRunArgs(["codex", "--read-only", "inspect"]).writeMode, "read_only");
+assert.equal(parseLocalAgentRunArgs(["codex", "--", "--read-only"]).writeMode, undefined);

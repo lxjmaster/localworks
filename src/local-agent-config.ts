@@ -9,6 +9,11 @@ const providerSchema = z.object({
   enabled: z.boolean(),
   model: z.string().trim().min(1).optional(),
   effort: z.string().trim().min(1).optional(),
+  writeMode: z.enum(["read_only", "allowed", "full_access"]).optional(),
+  readOnlyDefaults: z.object({
+    model: z.string().trim().min(1).optional(),
+    effort: z.string().trim().min(1).optional(),
+  }).strict().optional(),
 }).strict();
 
 export const subagentsConfigSchema = z.object({

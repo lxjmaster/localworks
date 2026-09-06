@@ -13,6 +13,7 @@ import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextpro
 import { SqliteOAuthClientsStore, SqliteOAuthStore } from "./oauth-store.js";
 
 export interface OAuthConfig {
+  resourceAliases?: string[];
   ownerToken: string;
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
@@ -112,6 +113,10 @@ function requestedScopesAllowed(requested: string[], supported: string[]): boole
 }
 
 export class SingleUserOAuthProvider implements OAuthServerProvider {
+  acceptsResource(resource: URL): boolean {
+    return checkResourceAllowed({ requestedResource: resource, configuredResource: this.resourceServerUrl })
+      || (this.config.resourceAliases ?? []).some((alias) => new URL(alias).href === resource.href);
+  }
   readonly clientsStore: OAuthRegisteredClientsStore;
   private readonly codes = new Map<string, AuthorizationCodeRecord>();
   private readonly oauthStore: SqliteOAuthStore;
@@ -132,7 +137,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response,
   ): Promise<void> {
-    if (!params.resource || !checkResourceAllowed({ requestedResource: params.resource, configuredResource: this.resourceServerUrl })) {
+    if (!params.resource || !this.acceptsResource(params.resource)) {
       throw new InvalidRequestError("Invalid or missing OAuth resource");
     }
     if (!requestedScopesAllowed(params.scopes ?? [], this.config.scopes)) {
@@ -199,7 +204,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     if (redirectUri && redirectUri !== record.params.redirectUri) {
       throw new InvalidGrantError("redirect_uri does not match the authorization request");
     }
-    if (resource && !checkResourceAllowed({ requestedResource: resource, configuredResource: this.resourceServerUrl })) {
+    if (resource && !this.acceptsResource(resource)) {
       throw new InvalidGrantError("Invalid resource");
     }
 
@@ -218,7 +223,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     if (!record || record.clientId !== client.client_id || record.expiresAt < Math.floor(Date.now() / 1000)) {
       throw new InvalidGrantError("Invalid refresh token");
     }
-    if (resource && !checkResourceAllowed({ requestedResource: resource, configuredResource: this.resourceServerUrl })) {
+    if (resource && !this.acceptsResource(resource)) {
       throw new InvalidGrantError("Invalid resource");
     }
 

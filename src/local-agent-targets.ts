@@ -11,6 +11,7 @@ export interface ParsedLocalAgentRunArgs {
   prompt: string;
   model?: string;
   effort?: string;
+  writeMode?: "read_only";
 }
 
 export interface ParsedLocalAgentContinueArgs {
@@ -18,6 +19,7 @@ export interface ParsedLocalAgentContinueArgs {
   prompt: string;
   model?: string;
   effort?: string;
+  writeMode?: "read_only";
 }
 
 export type LocalAgentTarget =
@@ -40,7 +42,7 @@ export type LocalAgentTarget =
 export function parseLocalAgentRunArgs(args: string[]): ParsedLocalAgentRunArgs {
   const parsed = parseAgentPromptArgs(
     args,
-    'Usage: devspace agents run <profile-or-provider> [--model <model>] [--effort <level>] "<prompt>"',
+    'Usage: devspace agents run <profile-or-provider> [--read-only] [--model <model>] [--effort <level>] "<prompt>"',
   );
   return parsed;
 }
@@ -48,9 +50,9 @@ export function parseLocalAgentRunArgs(args: string[]): ParsedLocalAgentRunArgs 
 export function parseLocalAgentContinueArgs(args: string[]): ParsedLocalAgentContinueArgs {
   const parsed = parseAgentPromptArgs(
     args,
-    'Usage: devspace agents continue <id> [--model <model>] [--effort <level>] "<prompt>"',
+    'Usage: devspace agents continue <id> [--read-only] [--model <model>] [--effort <level>] "<prompt>"',
   );
-  return { agentId: parsed.target, prompt: parsed.prompt, model: parsed.model, effort: parsed.effort };
+  return { agentId: parsed.target, prompt: parsed.prompt, model: parsed.model, effort: parsed.effort, ...(parsed.writeMode ? { writeMode: parsed.writeMode } : {}) };
 }
 
 function parseAgentPromptArgs(
@@ -64,6 +66,7 @@ function parseAgentPromptArgs(
 
   let model: string | undefined;
   let effort: string | undefined;
+  let writeMode: "read_only" | undefined;
   const promptParts: string[] = [];
   let optionsEnded = false;
   for (let index = 0; index < rest.length; index += 1) {
@@ -74,6 +77,10 @@ function parseAgentPromptArgs(
     }
     if (optionsEnded) {
       promptParts.push(part ?? "");
+      continue;
+    }
+    if (part === "--read-only") {
+      writeMode = "read_only";
       continue;
     }
     if (part === "--model") {
@@ -109,7 +116,7 @@ function parseAgentPromptArgs(
     throw new Error(usage);
   }
 
-  return { target, prompt, model, effort };
+  return { target, prompt, model, effort, ...(writeMode ? { writeMode } : {}) };
 }
 
 function parseOptionValue(value: string | undefined, option: string): string {

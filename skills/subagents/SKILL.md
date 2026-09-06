@@ -28,6 +28,12 @@ devspace agents run <profile-or-provider> "<brief>" --json
 devspace agents run <profile-or-provider> --model <model> --effort <effort> "<brief>" --json
 ```
 
+For read-only project inspection, explanation, research, or review, pass `--read-only` to `run` and to each read-only `continue` call. This selects read-only execution and the provider's configured `readOnlyDefaults` for model and effort. Explicit `--model` and `--effort` take precedence. Direct file reads do not invoke a subagent model.
+
+```bash
+devspace agents run codex --read-only "Explain this project without modifying files" --json
+```
+
 The result contains a DevSpace agent `id` and its current status. Execution continues independently, so retain the ID for later inspection or follow-up.
 
 ## Inspect and continue

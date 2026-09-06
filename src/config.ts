@@ -53,6 +53,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     host,
     port,
     oauth: {
+      resourceAliases: stored.oauth.resourceAliases,
       ownerToken: parseRequiredSecret(
         env.DEVSPACE_OAUTH_OWNER_TOKEN ?? files.auth.ownerToken,
       ),

@@ -411,8 +411,8 @@ function printHelp(): void {
       "  devspace config set publicBaseUrl <url|null>",
       "  devspace show-changes <review-ref> [--json]",
       "  devspace agents ls       List subagent sessions",
-      "  devspace agents run <profile-or-provider> [--model <model>] [--effort <level>] <prompt>",
-      "  devspace agents continue <id> [--model <model>] [--effort <level>] <prompt>",
+      "  devspace agents run <profile-or-provider> [--read-only] [--model <model>] [--effort <level>] <prompt>",
+      "  devspace agents continue <id> [--read-only] [--model <model>] [--effort <level>] <prompt>",
       "  devspace agents show <id>",
       "  devspace agents daemon <status|stop|logs>",
       "  devspace -v, --version   Print the installed version",
@@ -526,6 +526,7 @@ async function runAgentsRun(args: string[], json: boolean): Promise<void> {
     workspaceId: scope.workspaceId,
     model: parsed.model,
     effort: parsed.effort,
+    writeMode: parsed.writeMode,
   });
   const record = presentAgentResult(result, json);
   if (!record) return;
@@ -545,6 +546,7 @@ async function runAgentsContinue(args: string[], json: boolean): Promise<void> {
   const result = await client.continue(parsed.agentId, parsed.prompt, {
     model: parsed.model,
     effort: parsed.effort,
+    writeMode: parsed.writeMode,
   }, scope);
   const record = presentAgentResult(result, json);
   if (!record) return;
@@ -658,8 +660,8 @@ function printAgentsHelp(): void {
       "",
       "Usage:",
       "  devspace agents ls [--json]",
-      "  devspace agents run <profile-or-provider> [--model <model>] [--effort <level>] [--json] <prompt>",
-      "  devspace agents continue <id> [--model <model>] [--effort <level>] [--json] <prompt>",
+      "  devspace agents run <profile-or-provider> [--read-only] [--model <model>] [--effort <level>] [--json] <prompt>",
+      "  devspace agents continue <id> [--read-only] [--model <model>] [--effort <level>] [--json] <prompt>",
       "  devspace agents show <id> [--json]",
       "  devspace agents targets [--json]",
       "  devspace agents daemon <status|stop|logs> [--json]",

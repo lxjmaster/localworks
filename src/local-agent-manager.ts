@@ -150,8 +150,8 @@ export class LocalAgentManager {
         effort: target.effort,
       });
       return manager.begin(record, input.prompt, {
-        model: target.model,
-        effort: target.effort,
+        model: input.model,
+        effort: input.effort,
         writeMode: input.writeMode,
       }, input.workspaceId);
     });
@@ -246,6 +246,14 @@ export class LocalAgentManager {
       }));
     }
 
+    const providerConfig = this.subagents.providers.find((provider) => provider.id === record.provider);
+    if ((overrides.writeMode ?? providerConfig?.writeMode) === "read_only") {
+      overrides = {
+        ...overrides,
+        model: overrides.model ?? providerConfig?.readOnlyDefaults?.model,
+        effort: overrides.effort ?? providerConfig?.readOnlyDefaults?.effort,
+      };
+    }
     const updated = this.store.updateResult(record.id, {
       status: "running",
       model: overrides.model ?? record.model,
@@ -422,7 +430,9 @@ export class LocalAgentManager {
       prompt: fullPrompt,
       workspaceRoot: record.workspaceRoot,
       providerSessionId: record.providerSessionId,
-      writeMode: overrides.writeMode ?? "allowed",
+      writeMode: overrides.writeMode
+        ?? this.subagents.providers.find((provider) => provider.id === record.provider)?.writeMode
+        ?? "allowed",
       model: record.model ?? profile?.model,
       effort: record.effort ?? profile?.effort,
       modelOverrideRequested: overrides.model !== undefined,
