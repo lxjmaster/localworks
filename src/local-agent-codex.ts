@@ -1,4 +1,6 @@
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
+import { createHash } from "node:crypto";
+import { setTimeout as settle } from "node:timers/promises";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { delimiter, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -80,12 +82,27 @@ export interface CodexAppServerRuntimeOptions {
   version?: string;
 }
 
+export type CodexControlMethod = "account/read" | "thread/read" | "thread/list" | "thread/loaded/list" |
+  "thread/name/set" | "thread/archive" | "thread/unarchive";
+const CONTROL_METHODS: ReadonlySet<string> = new Set(["account/read", "thread/read", "thread/list", "thread/loaded/list",
+  "thread/name/set", "thread/archive", "thread/unarchive"]);
+
+export function codexInstanceIdentity(command: string, env: NodeJS.ProcessEnv, accountResult: unknown) {
+  const account = asRecord(asRecord(accountResult)?.account);
+  const accountKey = account?.type === "chatgpt" && typeof account.email === "string" ? account.email.trim().toLowerCase()
+    : typeof account?.id === "string" ? account.id : undefined;
+  const home = resolve(env.CODEX_HOME ?? join(homedir(), ".codex"));
+  const identity = createHash("sha256").update(JSON.stringify([hostname(), home, resolve(command), account?.type ?? "unknown", accountKey ?? "unverified"])).digest("hex");
+  return { instanceId: `codex_${identity}`, identityVerified: Boolean(accountKey) };
+}
+
 export class CodexAppServerRuntime implements LocalAgentRuntime {
   readonly provider = "codex" as const;
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly rpc: CodexAppServerRpc;
   private alive = true;
   private closePromise?: Promise<void>;
+  private identityPromise?: Promise<{ instanceId: string; identityVerified: boolean }>;
 
   constructor(private readonly options: CodexAppServerRuntimeOptions) {
     this.child = spawn(options.command, ["app-server"], {
@@ -114,6 +131,19 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
       capabilities: {},
     });
     this.rpc.notify("initialized");
+  }
+
+  /** Metadata/lifecycle RPC only. Never exposes arbitrary methods or starts inference. */
+  async control(method: CodexControlMethod, params: unknown): Promise<unknown> {
+    if (!CONTROL_METHODS.has(method)) throw new Error("Unsupported Codex lifecycle operation.");
+    return this.rpc.request(method, params);
+  }
+  identity(refresh = false): Promise<{ instanceId: string; identityVerified: boolean }> {
+    if (refresh) this.identityPromise = undefined;
+    this.identityPromise ??= this.rpc.request("account/read", { refreshToken: false })
+      .then((account) => codexInstanceIdentity(this.options.command, this.options.env, account))
+      .catch(() => codexInstanceIdentity(this.options.command, this.options.env, null));
+    return this.identityPromise;
   }
 
   async run(input: LocalAgentRunInput, callbacks?: LocalAgentRunCallbacks) {
@@ -168,13 +198,37 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
         }
 
         await callbacks?.onSessionId?.(threadId);
+        if (callbacks?.onThreadInfo) {
+          const identity = await this.identity(true);
+          let priorTurnIds: string[] | null = input.providerSessionId ? null : [];
+          let priorTurnsClosed = !input.providerSessionId;
+          if (input.providerSessionId) {
+            try {
+              const result = asRecord(await this.control("thread/read", { threadId, includeTurns: true }));
+              const thread = asRecord(result?.thread);
+              const turns = Array.isArray(thread?.turns) ? thread.turns.map(asRecord) : null;
+              if (turns && turns.every((turn) => typeof turn?.id === "string")) {
+                priorTurnIds = turns.map((turn) => turn!.id as string);
+                priorTurnsClosed = turns.every((turn) => ["completed", "failed", "interrupted"].includes(String(turn?.status)));
+              }
+            } catch { /* A missing boundary is reported as unknown, not billed to this task. */ }
+          }
+          await callbacks.onThreadInfo({ ...identity, threadId, createdHere: !input.providerSessionId,
+            priorTurnIds, priorTurnsClosed, title: input.sessionLabel });
+        }
+        if (!input.providerSessionId && input.sessionLabel) {
+          try { await this.control("thread/name/set", { threadId, name: input.sessionLabel }); callbacks?.onNameResult?.(true); }
+          catch { callbacks?.onNameResult?.(false); }
+        }
+        await callbacks?.onRequest?.();
         const completed = await this.rpc.runTurn(threadId, turnParams(input, threadId), (value) => {
           const usage = parseCodexUsage(value);
           if (!usage || usage.threadId !== threadId) return;
           // Telemetry failure must not cause paid work to be retried or crash the protocol loop.
           try { callbacks?.onUsage?.({ ...usage, newThread: !input.providerSessionId, providerVersion: this.options.version }); }
           catch { /* Missing telemetry remains unknown; it is never synthesized as zero. */ }
-        });
+        }, callbacks?.onTurnStarted);
+        callbacks?.onProviderFinished?.();
         const parsed = parseCompletedTurn(completed.event.params, completed.items);
         if (parsed.failure) {
           throw new AgentProviderExecutionError({
@@ -258,6 +312,7 @@ async function waitForProcessExit(
 export class CodexLocalAgentDriver implements LocalAgentDriver {
   readonly readOnlyConcurrency = true;
   readonly persistentProfileInstructions = true;
+  readonly reportsWorkLifecycle = true;
   readonly provider = "codex" as const;
   readonly idleTimeoutMs = 5 * 60_000;
 
@@ -362,6 +417,7 @@ class CodexAppServerRpc {
     reject: (error: Error) => void;
   }>();
   private readonly turns = new Map<string, CodexTurnAccumulator>();
+  private readonly recentUsage = new Map<string, { callback: (value: unknown) => void; expires: number }>();
   private nextId = 1;
   private fatalError?: Error;
   private buffer = "";
@@ -382,7 +438,14 @@ class CodexAppServerRpc {
     if (this.fatalError) return Promise.reject(this.fatalError);
     const id = String(this.nextId++);
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) reject(new Error(`Codex RPC timed out: ${method}. Reconcile before replaying a lifecycle operation.`));
+      }, 30_000);
+      timer.unref();
+      this.pending.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
       this.write({ id, method, ...(params === undefined ? {} : { params }) });
     });
   }
@@ -391,7 +454,8 @@ class CodexAppServerRpc {
     this.write({ method, ...(params === undefined ? {} : { params }) });
   }
 
-  async runTurn(threadId: string, params: unknown, onUsage?: (value: unknown) => void): Promise<CodexTurnResult> {
+  async runTurn(threadId: string, params: unknown, onUsage?: (value: unknown) => void,
+    onTurnStarted?: (turnId: string) => void | Promise<void>): Promise<CodexTurnResult> {
     if (this.fatalError) throw this.fatalError;
     if (this.turns.has(threadId)) throw new Error(`Codex thread ${threadId} already has an active turn.`);
     let resolveTurn!: (result: CodexTurnResult) => void;
@@ -412,13 +476,20 @@ class CodexAppServerRpc {
     try {
       const response = await this.request("turn/start", params);
       turn.turnId = readString(asRecord(response)?.turn, "id");
+      if (turn.turnId) await onTurnStarted?.(turn.turnId);
       for (const usage of turn.pendingUsage) {
         if (turn.turnId && asRecord(usage)?.turnId === turn.turnId) turn.onUsage?.(usage);
       }
       turn.pendingUsage = [];
-      if (turn.completed) return { event: turn.completed, items: turn.items };
-      return await completion;
+      const result = turn.completed ? { event: turn.completed, items: turn.items } : await completion;
+      // Bounded grace for final usage notifications delivered immediately after completion.
+      if (onUsage) await settle(150);
+      return result;
     } finally {
+      if (turn.turnId && turn.onUsage) {
+        this.recentUsage.set(`${threadId}:${turn.turnId}`, { callback: turn.onUsage, expires: Date.now() + 60_000 });
+        for (const [key, handler] of this.recentUsage) if (handler.expires <= Date.now() || this.recentUsage.size > 128) this.recentUsage.delete(key);
+      }
       if (this.turns.get(threadId) === turn) this.turns.delete(threadId);
     }
   }
@@ -430,6 +501,7 @@ class CodexAppServerRpc {
     for (const turn of this.turns.values()) turn.reject(this.fatalError);
     this.pending.clear();
     this.turns.clear();
+    this.recentUsage.clear();
   }
 
   private write(message: Record<string, unknown>): void {
@@ -465,6 +537,11 @@ class CodexAppServerRpc {
     }
     if (!method) return;
     const event = { method, params: message.params };
+    const usageParams = asRecord(event.params);
+    if (method === "thread/tokenUsage/updated" && typeof usageParams?.threadId === "string" && typeof usageParams.turnId === "string") {
+      const previous = this.recentUsage.get(`${usageParams.threadId}:${usageParams.turnId}`);
+      if (previous && previous.expires > Date.now()) { previous.callback(event.params); return; }
+    }
     const turn = this.findTurn(event);
     if (!turn) return;
     const params = asRecord(event.params);

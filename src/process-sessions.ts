@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
 import { ExecutionCoordinator, type ExecutionClaim } from "./execution-coordinator.js";
+import { WorkLedger } from "./work-ledger.js";
+import { randomUUID } from "node:crypto";
 
 const DEFAULT_EXEC_YIELD_MS = 10_000;
 const DEFAULT_INTERACTIVE_YIELD_MS = 250;
@@ -24,6 +26,7 @@ export interface StartCommandInput {
   yieldTimeMs?: number;
   maxOutputTokens?: number;
   resources?: string[];
+  workRunId?: string;
 }
 
 export interface WriteStdinInput {
@@ -67,6 +70,7 @@ interface ProcessSession {
   resolveExit: () => void;
   cleanupTimer?: NodeJS.Timeout;
   executionClaim?: ExecutionClaim;
+  workOperationId?: string;
 }
 
 interface ProcessSessionManagerOptions {
@@ -216,6 +220,7 @@ function truncateOutput(output: string, maxCharacters: number): { output: string
 }
 
 export class ProcessSessionManager {
+  private readonly workStateDir?: string;
   private readonly sessions = new Map<number, ProcessSession>();
   private readonly maxBufferCharacters: number;
   private readonly completedSessionTtlMs: number;
@@ -225,6 +230,7 @@ export class ProcessSessionManager {
   private shuttingDown = false;
 
   constructor(options: ProcessSessionManagerOptions = {}) {
+    this.workStateDir = options.stateDir;
     this.maxBufferCharacters = options.maxBufferCharacters ?? DEFAULT_BUFFER_CHARACTERS;
     this.completedSessionTtlMs = options.completedSessionTtlMs ?? COMPLETED_SESSION_TTL_MS;
     if (options.stateDir) this.executionCoordinator = new ExecutionCoordinator(options.stateDir);
@@ -261,9 +267,18 @@ export class ProcessSessionManager {
     this.sessions.set(session.id, session);
 
     try {
+      if (input.workRunId && this.workStateDir) {
+        const ledger = new WorkLedger(this.workStateDir);
+        try {
+          ledger.requireScope(input.workRunId, input.workspaceRoot ?? input.cwd, input.workspaceId);
+          session.workOperationId = ledger.operation({ runId: input.workRunId, requestKey: `command:${randomUUID()}`,
+            kind: "command", label: "受管命令（不记录原始命令或凭据）", status: "running" });
+        } finally { ledger.close(); }
+      } else if (input.workRunId) throw new Error("Work accounting is unavailable; command was not started.");
       if (input.tty && process.platform !== "win32") await this.startPty(session, input);
       else this.startPipe(session, input);
     } catch (error) {
+      this.endWorkOperation(session, false);
       this.sessions.delete(session.id);
       this.releaseClaim(session.executionClaim);
       throw error;
@@ -425,6 +440,7 @@ export class ProcessSessionManager {
     session.running = false;
     session.exitCode = exitCode;
     session.signal = signal;
+    this.endWorkOperation(session, exitCode === 0 && !signal);
     this.releaseClaim(session.executionClaim);
     session.resolveExit();
     session.cleanupTimer = setTimeout(
@@ -432,6 +448,14 @@ export class ProcessSessionManager {
       this.completedSessionTtlMs,
     );
     session.cleanupTimer.unref();
+  }
+
+  private endWorkOperation(session: ProcessSession, success: boolean): void {
+    if (!session.workOperationId || !this.workStateDir) return;
+    const ledger = new WorkLedger(this.workStateDir);
+    try { ledger.endOperation(session.workOperationId, success ? "completed" : "failed"); session.workOperationId = undefined; }
+    catch { this.append(session, "Work accounting could not be finalized; reconcile the work run before marking it complete.\n"); }
+    finally { ledger.close(); }
   }
 
   private append(session: ProcessSession, output: string): void {

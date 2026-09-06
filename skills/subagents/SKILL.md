@@ -5,6 +5,17 @@ description: Delegate focused coding, research, review, or verification work to 
 
 # DevSpace subagents
 
+When `work_task` is exposed, begin one top-level work run before inspection or delegation,
+even when the host does everything without Codex. Keep workItemId for the objective,
+runKey for this execution, and propagate workRunId through read/context, mutation,
+command and agent tools. A model display label is not verified provenance. Finish
+with explicit evidence only after child operations stop. Include the returned Codex
+total and completeness in the final answer; unknown is not zero. `agent_task observe`
+contains the same work receipt, but model completion does not imply accepted work.
+Do not sum cumulative snapshots or cache/reasoning breakdowns. External manual Codex
+activity is not the current run's usage. `/console/` displays these receipts and
+previews project-scoped archive/restore; archival never cancels or deletes work.
+
 Use direct host tools first. `read` and `workspace_context` list/capture/literal-search source without invoking Codex. The host should establish project context, select relevant evidence and perform deterministic checks itself when practical. Do not create a worker just to browse a directory, repeat a repository overview, summarize a known log or wait for a process. Delegating is optional, not the default prerequisite for understanding a project.
 
 When reasoning or implementation benefits from a worker, use native `agent_task` instead of a shell wrapper. A managed shell occupies the checkout, so a wrapper can itself block admission/observation. The direct-terminal CLI remains supported. Never bypass a conflict by changing directories, changing state directories or disabling a guard.

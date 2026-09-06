@@ -13,7 +13,7 @@ import {
 import { join, resolve } from "node:path";
 
 // Older daemons cannot enforce task identity and shared execution admission.
-export const LOCAL_AGENT_DAEMON_PROTOCOL_VERSION = 5;
+export const LOCAL_AGENT_DAEMON_PROTOCOL_VERSION = 6;
 export const LOCAL_AGENT_DAEMON_SOCKET_NAME = "agentd.sock";
 export const LOCAL_AGENT_DAEMON_PID_NAME = "agentd.pid";
 export const LOCAL_AGENT_DAEMON_LOCK_NAME = "agentd.lock";

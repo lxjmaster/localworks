@@ -1,6 +1,7 @@
 import type { Result } from "better-result";
 import type { AgentProviderError } from "./local-agent-errors.js";
 import type { LocalAgentProvider } from "./local-agent-profiles.js";
+import type { ProviderThreadObservation } from "./work-ledger.js";
 import type { AgentUsageObservation } from "./agent-usage.js";
 
 export type LocalAgentWriteMode = "read_only" | "allowed" | "full_access";
@@ -18,6 +19,7 @@ export interface LocalAgentRunInput {
   analysisOnly?: boolean;
   /** Stable profile slot, separate from each new user task. */
   profileInstructions?: string;
+  sessionLabel?: string;
 }
 
 export interface LocalAgentRunResult {
@@ -28,6 +30,11 @@ export interface LocalAgentRunResult {
 }
 
 export interface LocalAgentRunCallbacks {
+  onThreadInfo?: (observation: ProviderThreadObservation) => void | Promise<void>;
+  onNameResult?: (success: boolean) => void;
+  onRequest?: () => void | Promise<void>;
+  onTurnStarted?: (turnId: string) => void | Promise<void>;
+  onProviderFinished?: () => void;
   onUsage?: (observation: AgentUsageObservation) => void;
   /**
    * Called as soon as a provider creates or resolves a durable continuation
@@ -68,6 +75,8 @@ export interface LocalAgentDriver {
   readonly provider: LocalAgentProvider;
   readonly readOnlyConcurrency?: boolean;
   readonly persistentProfileInstructions?: boolean;
+  /** Provider adapter reports thread/turn/request lifecycle boundaries to the work ledger. */
+  readonly reportsWorkLifecycle?: boolean;
   runtimeKey(context: LocalAgentRuntimeContext): string;
   createRuntime(context: LocalAgentRuntimeContext): Promise<Result<LocalAgentRuntime, AgentProviderError>>;
   readonly idleTimeoutMs?: number;

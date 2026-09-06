@@ -114,6 +114,27 @@
       },
       "additionalProperties": false
     },
+    "console": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "allowRemote": {
+          "default": false,
+          "type": "boolean"
+        },
+        "sessionTtlSeconds": {
+          "default": 3600,
+          "type": "integer",
+          "minimum": 300,
+          "maximum": 86400
+        }
+      },
+      "additionalProperties": false
+    },
     "artifacts": {
       "default": {},
       "type": "object",

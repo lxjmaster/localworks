@@ -83,8 +83,8 @@ rejected so spelling mistakes cannot silently alter behavior.
 
 | Value | Tool surface |
 | --- | --- |
-| `codex` | Default. `open_workspace`, `read`, `workspace_context`, `agent_task`, `apply_patch`, `exec_command`, `write_stdin`, and `show_changes`. |
-| `claude` | `open_workspace`, `read`, `workspace_context`, `agent_task`, `write`, `edit`, `bash`, and `show_changes`. |
+| `codex` | Default. `open_workspace`, `read`, `workspace_context`, `work_task`, `agent_task`, `apply_patch`, `exec_command`, `write_stdin`, and `show_changes`. |
+| `claude` | `open_workspace`, `read`, `workspace_context`, `work_task`, `agent_task`, `write`, `edit`, `bash`, and `show_changes`. |
 
 The dedicated tools `grep`, `glob`, and `ls` are not exposed. `workspace_context`
 provides nonrecursive listing and literal search/capture over selected files without
@@ -136,6 +136,20 @@ are `CODEX_COMMAND`, `CODEX_HOME`, `CLAUDE_COMMAND`, `CURSOR_COMMAND`,
 `COPILOT_COMMAND`, `GROK_COMMAND`, and `GROK_AGENT_PROFILE`. DevSpace does not
 persist provider credentials.
 
+### Project console and completion receipts
+
+`console.enabled` defaults to true, `console.allowRemote` to false, and
+`console.sessionTtlSeconds` to 3600 (300–86400). `/console/` uses its own owner login,
+HttpOnly/SameSite session cookie, strict Origin/CSRF checks and project scopes.
+Remote access requires explicit opt-in and the configured HTTPS publicBaseUrl.
+
+Both surfaces expose `work_task`. Begin a run before host reads or delegation,
+propagate workRunId, and finish after child operations stop with explicit acceptance
+evidence. Receipts and the dashboard use the same complete mapped-execution query,
+not a last-20 snapshot window. Unknown history is not zero and not assigned to a
+later task. See [project-console.md](project-console.md) for protocol 6, metadata
+ownership, archival safeguards, limits and actual verification boundaries.
+
 ### Codex efficiency and execution coordination
 
 Prefer direct host inspection with `read`/`workspace_context`. These do not invoke a provider and do not occupy Codex slots. Delegate only work requiring additional reasoning or implementation; passing a host summary still consumes some worker input tokens, so keep it relevant and versioned rather than copying the entire host trajectory.
@@ -152,7 +166,7 @@ Excess work waits locally without starting a provider; a queued writer blocks la
 
 The Codex shared-analysis adapter uses thread-local read-only/network restrictions, disables configured MCP/apps/plugins and native nested fanout, and checks the returned sandbox before turn/start. Null optional tables and Unicode/plugin@market names are supported; ambiguous dotted/quoted identifiers fail closed until their installed-provider semantics are supported. Profile rules use a stable developer-instruction slot while preserving configured global instructions, rather than being appended to every new user prompt. Applicable AGENTS.md rules are not removed. No global Codex configuration is rewritten and cache hits are not guaranteed.
 
-Daemon protocol version **5** prevents an older daemon from ignoring queued states or context/request fields. An interrupted queued task is marked for review on restart, not automatically replayed; no prompt body is stored in waiter metadata. Use the controlled upgrade/reconnect flow after active work has settled; do not replace a running server's dist mid-task. See [phase-two implementation and verification](host-first-readonly-workflows.md); the [phase-one record](codex-efficiency-implementation.md) is historical and its blanket read exclusivity is superseded.
+Daemon protocol version **6** prevents an older daemon from ignoring queued states, context/request fields and work-run ownership. Interrupted tasks are marked for review, not automatically replayed; no prompt body is stored in waiter metadata. Use the controlled upgrade/reconnect flow after active work has settled; do not replace a running server's dist mid-task. See [console verification](project-console.md), [phase-two history](host-first-readonly-workflows.md), and [phase-one history](codex-efficiency-implementation.md).
 
 ## Native artifact download
 

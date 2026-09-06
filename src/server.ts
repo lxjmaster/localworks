@@ -41,6 +41,8 @@ import {
 } from "./mcp-modern-server.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { registerWorkspaceContextTool } from "./tool-surfaces/workspace-context.js";
+import { registerWorkTaskTool, trackedWork } from "./tool-surfaces/work-task.js";
+import { createProjectConsoleRouter } from "./project-console-router.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
@@ -604,6 +606,7 @@ function registerMcpSurface(
           .filter(Boolean)
           .join(" "),
       inputSchema: {
+        workRunId: z.string().optional().describe("Run from work_task begin; records this direct host operation without calling Codex."),
         workspaceId: z
           .string()
           .describe(workspaceIdDescription),
@@ -630,18 +633,18 @@ function registerMcpSurface(
       outputSchema: resultOutputSchema(),
       annotations: { readOnlyHint: true },
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, workRunId, ...input }) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       const readPath = workspaces.resolveReadPath(workspace, input.path);
-      const response = await processSessions.readWorkspace(workspace.root, () => readFileTool(
+      const response = await trackedWork(config.stateDir, workRunId, { root: workspace.root, workspaceId }, "read", () => processSessions.readWorkspace(workspace.root, () => readFileTool(
         { ...input, path: readPath.absolutePath },
         {
           cwd: workspace.root,
           root: workspace.root,
           readRoots: readPath.readRoots,
         },
-      ));
+      )));
 
       if (response.isError) {
         logFailedToolResponse(config, {
@@ -670,6 +673,7 @@ function registerMcpSurface(
   );
 
   registerWorkspaceContextTool({ server, config, workspaces, processSessions });
+  registerWorkTaskTool({ server, config, workspaces, processSessions });
 
   toolSurface.register({
     server: registrationTarget,
@@ -898,6 +902,10 @@ export function createServer(
     res.json({ ok: true, name: "devspace" });
   });
 
+  const projectConsole = createProjectConsoleRouter(config, { assetDirectory: uiBuildDirectory() });
+  app.get("/console", (req, res) => res.redirect(303, `/console/${req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""}`));
+  app.use("/console", projectConsole.router);
+
   app.all("/mcp", async (req, res) => {
     const requestId = res.locals.requestId as string | undefined;
 
@@ -955,6 +963,7 @@ export function createServer(
         }
         await toolActivities.waitForIdle();
         processSessions.shutdown();
+        projectConsole.close();
         oauthProvider.close();
         workspaceStore.close?.();
       })();

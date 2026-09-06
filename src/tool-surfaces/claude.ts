@@ -1,5 +1,6 @@
 import * as z from "zod/v4";
 import { registerAgentTaskTool } from "./agent-task.js";
+import { trackedWork } from "./work-task.js";
 import {
   editFileTool,
   runShellTool,
@@ -29,7 +30,7 @@ export function claudeInstructions({
   agents,
   skills,
 }: ToolInstructionContext): string {
-  return `${agents}${skills}${CLAUDE_INSTRUCTIONS} Read project context directly as the host with read or workspace_context before deciding to delegate. These tools do not invoke Codex; do not start workers merely to browse directories, summarize known logs or wait. Use agent_task for subagent control, not shell wrappers. Pass relevant versioned evidence and continue related sessions. Verified readers share bounded access; writes and unknown-effect commands remain exclusive.`;
+  return `${agents}${skills}${CLAUDE_INSTRUCTIONS} Begin a work_task run even for host-only work; propagate workRunId to reads, mutations, commands and agent tasks. Finish with explicit acceptance evidence and include the returned Codex usage/completeness receipt in the final response. Read project context directly as the host with read or workspace_context before deciding to delegate. These tools do not invoke Codex; do not start workers merely to browse directories, summarize known logs or wait. Use agent_task for subagent control, not shell wrappers. Pass relevant versioned evidence and continue related sessions. Verified readers share bounded access; writes and unknown-effect commands remain exclusive.`;
 }
 
 export function registerClaudeTools(context: ToolRegistrationContext): void {
@@ -49,6 +50,7 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
       title: "Write file",
       description: `Create or completely overwrite a file in a workspace. Prefer ${toolNames.edit} for targeted changes to existing files.`,
       inputSchema: {
+        workRunId: z.string().optional(),
         workspaceId: z.string().describe(workspaceIdDescription),
         path: z
           .string()
@@ -58,14 +60,14 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
       outputSchema: resultOutputSchema(),
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, workRunId, ...input }) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
-      const response = await processSessions.mutate(workspace.root, () => writeFileTool(input, {
+      const response = await trackedWork(config.stateDir, workRunId, { root: workspace.root, workspaceId }, "write", () => processSessions.mutate(workspace.root, () => writeFileTool(input, {
         cwd: workspace.root,
         root: workspace.root,
-      }));
+      })));
 
       if (response.isError) {
         logFailedToolResponse(
@@ -104,6 +106,7 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
       title: "Edit file",
       description: `Edit one file in a workspace by replacing exact text blocks. Prefer this over ${toolNames.write} for targeted changes. Each oldText must match a unique, non-overlapping region of the original file; merge nearby changes into one edit and keep oldText as small as possible while still unique.`,
       inputSchema: {
+        workRunId: z.string().optional(),
         workspaceId: z.string().describe(workspaceIdDescription),
         path: z
           .string()
@@ -126,14 +129,14 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
       }),
       annotations: EDIT_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, workRunId, ...input }) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
-      const response = await processSessions.mutate(workspace.root, () => editFileTool(input, {
+      const response = await trackedWork(config.stateDir, workRunId, { root: workspace.root, workspaceId }, "edit", () => processSessions.mutate(workspace.root, () => editFileTool(input, {
         cwd: workspace.root,
         root: workspace.root,
-      }));
+      })));
 
       if (response.isError) {
         logFailedToolResponse(
@@ -182,6 +185,7 @@ function registerShellTool(context: ToolRegistrationContext): void {
       title: "Bash",
       description: CLAUDE_SHELL_DESCRIPTION,
       inputSchema: {
+        workRunId: z.string().optional(),
         workspaceId: z.string().describe(workspaceIdDescription),
         command: z
           .string()
@@ -202,17 +206,17 @@ function registerShellTool(context: ToolRegistrationContext): void {
       outputSchema: resultOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, workingDirectory, ...input }) => {
+    async ({ workspaceId, workingDirectory, workRunId, ...input }) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       const cwd = workspaces.resolveWorkingDirectory(
         workspace,
         workingDirectory,
       );
-      const response = await processSessions.mutate(workspace.root, () => runShellTool(input, {
+      const response = await trackedWork(config.stateDir, workRunId, { root: workspace.root, workspaceId }, "bash", () => processSessions.mutate(workspace.root, () => runShellTool(input, {
         cwd,
         root: workspace.root,
-      }));
+      })));
 
       if (response.isError) {
         logFailedToolResponse(

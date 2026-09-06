@@ -3,6 +3,7 @@ import { ExecutionCoordinator, ExecutionConflictError, canonicalExecutionRoot, t
 import { setTimeout as delay } from "node:timers/promises";
 import { contextPrompt, validateContextShape, verifyHostContext, type HostPreparedContext } from "./workspace-context.js";
 import { createHash, randomUUID } from "node:crypto";
+import { WorkLedger } from "./work-ledger.js";
 import { Result, type Result as BetterResult } from "better-result";
 import {
   AgentConflictError,
@@ -54,6 +55,7 @@ export interface StartLocalAgentInput {
   freshContext?: boolean;
   context?: HostPreparedContext;
   resources?: string[];
+  workRunId?: string;
 }
 
 export interface RunOverrides {
@@ -63,6 +65,7 @@ export interface RunOverrides {
   requestKey?: string;
   context?: HostPreparedContext;
   resources?: string[];
+  workRunId?: string;
 }
 
 export interface LocalAgentManagerLogger {
@@ -102,12 +105,14 @@ export class LocalAgentManager {
   private readonly activeTurns = new Map<string, Promise<void>>();
   private readonly queuedTurns = new Map<string, AbortController>();
   private readonly execution: ExecutionCoordinator;
+  private readonly ledger: WorkLedger;
   private accepting = true;
   private closePromise?: Promise<void>;
 
   constructor(options: LocalAgentManagerOptions) {
     this.store = options.store;
     this.execution = new ExecutionCoordinator(options.store.stateDir);
+    this.ledger = new WorkLedger(options.store.stateDir);
     for (const driver of options.drivers) this.drivers.set(driver.provider, driver);
     this.pool = options.pool;
     this.loadProfiles = options.loadProfiles;
@@ -118,6 +123,8 @@ export class LocalAgentManager {
   }
 
   reconcileActiveRuns(message?: string): BetterResult<number, AgentStoreError> {
+    try { this.ledger.reconcileInterruptedExecutions(); }
+    catch (error) { return Result.err(new AgentStoreError("reconcile_work_ledger", error)); }
     return this.store.reconcileActiveRunsResult(message);
   }
 
@@ -173,7 +180,7 @@ export class LocalAgentManager {
       }
       const task = input.taskKey ? { key: input.taskKey, canonicalRoot: canonicalExecutionRoot(workspaceRoot),
         hash: createHash("sha256").update(JSON.stringify([input.prompt, input.target, input.writeMode, input.model, input.effort,
-          input.context, input.contextKey, input.workItemId, input.freshContext, input.resources])).digest("hex") } : undefined;
+          input.context, input.contextKey, input.workItemId, input.freshContext, input.resources, input.workRunId])).digest("hex") } : undefined;
       const provider = manager.subagents.providers.find((entry) => entry.id === target.provider);
       const mode = input.writeMode ?? provider?.writeMode ?? "allowed";
       const readDefaults = mode === "read_only" ? provider?.readOnlyDefaults : undefined;
@@ -202,6 +209,7 @@ export class LocalAgentManager {
         writeMode: input.writeMode,
         context: input.context,
         resources: input.resources,
+        workRunId: input.workRunId,
       }, input.workspaceId, target);
       if (started.isErr()) manager.store.updateResult(record.id, {
         status: "stopped", error: started.error.message,
@@ -289,6 +297,7 @@ export class LocalAgentManager {
         }
       }
       this.execution.close();
+      this.ledger.close();
       this.store.close();
     })();
     return this.closePromise;
@@ -334,6 +343,23 @@ export class LocalAgentManager {
       }));
     }
 
+    let executionId: string;
+    try {
+      this.ledger.assertAgentUsable(record.id);
+      const prior = this.ledger.latestExecution(record.id);
+      const priorRun = prior ? this.ledger.run(prior.run_id) : undefined;
+      const reusable = !overrides.workRunId && priorRun?.status === "running" && JSON.parse(priorRun.origin).entryPoint === "devspace_cli"
+        ? priorRun.id : undefined;
+      const work = overrides.workRunId || reusable
+        ? this.ledger.requireScope(overrides.workRunId ?? reusable!, record.workspaceRoot, workspaceId)
+        : this.ledger.begin({ root: record.workspaceRoot, workspaceId, workItemId: record.workItemId ?? `agent-${record.id}`,
+          runKey: `cli-${randomUUID()}`, title: `DevSpace · ${record.workItemId ?? record.id}`.slice(0, 160),
+          origin: { entryPoint: "devspace_cli", evidence: "server_entry" } });
+      executionId = this.ledger.beginExecution({ runId: work.id, agentId: record.id, provider: record.provider,
+        model: overrides.model ?? defaults?.model, effort: overrides.effort ?? defaults?.effort });
+    } catch (error) { return Result.err(new AgentStoreError("work_accounting", error,
+      "Unable to establish work ownership; inspect the task/thread state before provider invocation.")); }
+
     // Resolve effective capability BEFORE choosing the source lock, not after it.
     const providerConfig = this.subagents.providers.find((provider) => provider.id === record.provider);
     const effectiveMode = overrides.writeMode ?? providerConfig?.writeMode ?? "allowed";
@@ -355,6 +381,7 @@ export class LocalAgentManager {
         ticket = this.execution.enqueue(requirement, waitMs);
       }
     } catch (error) {
+      this.ledger.endExecution(executionId, "failed");
       if (error instanceof ExecutionConflictError) return Result.err(new AgentConflictError({
         code: "AGENT_CONFLICT", agentId: error.agentId, operation: "admission", retryable: true, message: error.message,
       }));
@@ -379,7 +406,7 @@ export class LocalAgentManager {
       errorCode: undefined,
       errorRetryable: undefined,
     });
-    if (updated.isErr()) { claim?.release(); ticket?.cancel(); return updated; }
+    if (updated.isErr()) { claim?.release(); ticket?.cancel(); this.ledger.endExecution(executionId, "failed"); return updated; }
     const controller = new AbortController();
     if (ticket) this.queuedTurns.set(record.id, controller);
     // Defer invocation until after the tracking entry is visible. This keeps
@@ -395,7 +422,7 @@ export class LocalAgentManager {
         if (controller.signal.aborted || !this.accepting) throw new Error("Queue cancelled before provider invocation.");
         const running = this.store.updateResult(record.id, { status: "running" });
         if (running.isErr()) throw running.error;
-        await this.runTurn(running.value, prompt, overrides, workspaceId, claim, analysisOnly);
+        await this.runTurn(running.value, prompt, overrides, workspaceId, claim, analysisOnly, executionId);
       } catch (error) {
         const existing = this.store.getById(record.id);
         // runTurn already persisted its own error; don't relabel it a queue failure.
@@ -407,8 +434,13 @@ export class LocalAgentManager {
         if (!ticket) throw error;
       }
     }).finally(() => {
-      this.queuedTurns.delete(record.id);
-      ticket?.cancel(); claim?.release(); this.activeTurns.delete(record.id);
+      try {
+        const terminal = this.store.getById(record.id)?.status;
+        this.ledger.endExecution(executionId, terminal === "idle" ? "completed" : terminal === "stopped" ? "cancelled" : "failed");
+      } finally {
+        this.queuedTurns.delete(record.id);
+        ticket?.cancel(); claim?.release(); this.activeTurns.delete(record.id);
+      }
     });
     this.activeTurns.set(record.id, turn);
     void turn.catch(() => undefined);
@@ -422,6 +454,7 @@ export class LocalAgentManager {
     workspaceId?: string,
     claim?: ExecutionClaim,
     analysisOnly = false,
+    executionId?: string,
   ): Promise<void> {
     const startedAt = Date.now();
     this.log("info", "agent_run_started", {
@@ -436,6 +469,7 @@ export class LocalAgentManager {
         return;
       }
       const workspaceRoot = authorized.value;
+      this.ledger.assertAgentUsable(record.id);
       try { verifyHostContext(workspaceRoot, overrides.context); }
       catch (error) {
         this.persistRunError(record, new AgentTargetError({ code: "TARGET_RESOLUTION_FAILED", target: record.profileName,
@@ -466,6 +500,8 @@ export class LocalAgentManager {
         return;
       }
       input.value.analysisOnly = analysisOnly;
+      if (executionId) this.ledger.requestedConfiguration(executionId, input.value.model, input.value.effort);
+      if (executionId) input.value.sessionLabel = this.ledger.sessionTitle(this.ledger.execution(executionId).run_id);
       const context: LocalAgentRuntimeContext = {
         agentId: record.id,
         provider: driver.value.provider,
@@ -477,9 +513,15 @@ export class LocalAgentManager {
         agentDir: this.agentDir,
       };
       const callbacks: LocalAgentRunCallbacks = {
+        onThreadInfo: executionId ? (observation) => { this.ledger.attachThread(executionId, observation); } : undefined,
+        onNameResult: executionId ? (success) => { this.ledger.nameResult(executionId, success); } : undefined,
+        onRequest: executionId ? () => { this.ledger.requestStarted(executionId); } : undefined,
+        onTurnStarted: executionId ? (turnId) => { this.ledger.turnStarted(executionId, turnId); } : undefined,
+        onProviderFinished: executionId ? () => { this.ledger.providerFinished(executionId); } : undefined,
         onUsage: (usage) => {
           const saved = this.store.recordUsageResult(record.id, usage);
           if (saved.isErr()) this.log("warn", "agent_usage_persistence_failed", { agentId: record.id, errorCode: saved.error.code });
+          if (executionId) this.ledger.usage(executionId, usage);
         },
         onSessionId: (providerSessionId) => {
           claim?.bindThread(`${record.provider}:${providerSessionId}`);
@@ -490,6 +532,8 @@ export class LocalAgentManager {
           if (updated.isErr()) throw updated.error;
         },
       };
+      // An older/uninstrumented Codex adapter must never turn unknown paid work into zero.
+      if (executionId && record.provider === "codex" && !driver.value.reportsWorkLifecycle) this.ledger.requestStarted(executionId);
       const result = await this.pool.run(driver.value, context, input.value, callbacks);
       if (result.isErr()) {
         this.persistRunError(record, result.error, startedAt);

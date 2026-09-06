@@ -28,11 +28,11 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
   }> = [
     {
       mode: "claude",
-      expected: ["open_workspace", "read", "workspace_context", "agent_task", "write", "edit", "bash", "show_changes"],
+      expected: ["open_workspace", "read", "workspace_context", "work_task", "agent_task", "write", "edit", "bash", "show_changes"],
     },
     {
       mode: "codex",
-      expected: ["open_workspace", "read", "workspace_context", "agent_task", "apply_patch", "exec_command", "write_stdin", "show_changes"],
+      expected: ["open_workspace", "read", "workspace_context", "work_task", "agent_task", "apply_patch", "exec_command", "write_stdin", "show_changes"],
     },
   ];
 
@@ -548,6 +548,7 @@ async function fixture(
     ? options.localAgentProviders()
     : options.localAgentProviders ?? [];
   const loadedConfig = loadConfig(writeTestDevspaceConfig(join(root, ".config"), {
+    storage: { stateDir },
     server: { port: 1 },
     workspaces: { allowedRoots: [root], worktreeRoot: join(root, ".worktrees") },
     skills: { agentDir },

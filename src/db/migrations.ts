@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { migrateProjectConsole } from "../project-console-schema.js";
 
 interface Migration {
   version: number;
@@ -149,6 +150,8 @@ export function migrateDatabase(sqlite: Database.Database): void {
 
   migrate.immediate();
 }
+
+migrations.push({ version: 11, name: "project-console-work-ledger", up: migrateProjectConsole });
 
 function migrateWorkspaceState(sqlite: Database.Database): void {
   sqlite.exec(`

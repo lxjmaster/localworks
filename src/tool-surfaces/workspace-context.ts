@@ -4,14 +4,16 @@ import { relative, isAbsolute, sep } from "node:path";
 import * as z from "zod/v4";
 import { readContextFile } from "../workspace-context.js";
 import type { ToolRegistrationContext } from "./types.js";
+import { trackedWork } from "./work-task.js";
 
 /** Deterministic host-side context preparation. No agent client, model, or shell. */
-export function registerWorkspaceContextTool({ server, workspaces, processSessions }: ToolRegistrationContext): void {
+export function registerWorkspaceContextTool({ server, config, workspaces, processSessions }: ToolRegistrationContext): void {
   server.registerTool("workspace_context", {
     title: "Inspect workspace directly without Codex",
     description: "Host-first local inspection: list one directory, capture selected source ranges and full-file hashes, or search a literal in explicitly selected files. No model invocation, automatic repository survey or recursive traversal. Prefer this and read for context gathering before deciding whether a Codex worker is needed. Follow applicable project instructions first. Captures are versioned evidence, not a shared model memory or immutable checkout.",
     inputSchema: {
       workspaceId: z.string(),
+      workRunId: z.string().optional(),
       action: z.enum(["list", "capture", "search"]),
       directory: z.string().optional(),
       offset: z.number().int().min(0).max(100_000).optional(),
@@ -24,7 +26,7 @@ export function registerWorkspaceContextTool({ server, workspaces, processSessio
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (input) => {
     const workspace = workspaces.getWorkspace(input.workspaceId);
-    const value = await processSessions.readWorkspace(workspace.root, async () => {
+    const capture = () => processSessions.readWorkspace(workspace.root, async () => {
       if (input.action === "list") {
         const base = await realpath(workspace.root);
         const path = workspaces.resolvePath(workspace, input.directory ?? ".");
@@ -65,6 +67,7 @@ export function registerWorkspaceContextTool({ server, workspaces, processSessio
         consistency: "Selected file versions under a cooperative read claim. External edits require revalidation. This is not a whole-repository snapshot.",
         delegation: "Use the host to summarize relevant facts; pass summary and refs as agent_task.context only when a worker is actually needed." };
     });
+    const value = input.workRunId ? await trackedWork(config.stateDir, input.workRunId, { root: workspace.root, workspaceId: workspace.id }, "workspace_context", capture) : await capture();
     return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
   });
 }

@@ -1,4 +1,5 @@
-import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 
 export const workspaceSessions = sqliteTable(
   "workspace_sessions",
@@ -176,3 +177,50 @@ export const agentUsageSnapshots = sqliteTable("agent_usage_snapshots", {
   observedAt: text("observed_at").notNull(),
   providerVersion: text("provider_version"),
 }, (table) => [primaryKey({ columns: [table.agentId, table.threadId, table.turnId] })]);
+
+export const consoleProjects = sqliteTable("console_projects", {
+  id: text("id").primaryKey(), root: text("root").notNull().unique(), name: text("name").notNull(), createdAt: text("created_at").notNull(),
+});
+export const consoleWorkItems = sqliteTable("console_work_items", {
+  id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => consoleProjects.id),
+  itemKey: text("item_key").notNull(), title: text("title").notNull(), createdAt: text("created_at").notNull(),
+}, (table) => [uniqueIndex("console_item_identity").on(table.projectId, table.itemKey)]);
+export const consoleWorkRuns = sqliteTable("console_work_runs", {
+  id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => consoleProjects.id),
+  itemId: text("item_id").notNull().references(() => consoleWorkItems.id), workspaceId: text("workspace_id"),
+  runKey: text("run_key").notNull(), requestHash: text("request_hash").notNull(), origin: text("origin").notNull(),
+  status: text("status").notNull().default("running"), acceptance: text("acceptance").notNull().default("pending"),
+  summary: text("summary").notNull().default(""), evidence: text("evidence").notNull().default("[]"),
+  revision: integer("revision").notNull().default(1), createdAt: text("created_at").notNull(), finishedAt: text("finished_at"),
+}, (table) => [uniqueIndex("console_run_identity").on(table.itemId, table.runKey), index("console_runs_project").on(table.projectId, table.createdAt, table.id)]);
+export const consoleOperations = sqliteTable("console_operations", {
+  id: text("id").primaryKey(), runId: text("run_id").notNull().references(() => consoleWorkRuns.id), requestKey: text("request_key").notNull(),
+  kind: text("kind").notNull(), label: text("label").notNull(), status: text("status").notNull(), evidence: text("evidence").notNull().default("[]"),
+  createdAt: text("created_at").notNull(), finishedAt: text("finished_at"),
+}, (table) => [uniqueIndex("console_operation_identity").on(table.runId, table.requestKey)]);
+export const consoleThreads = sqliteTable("console_threads", {
+  id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => consoleProjects.id),
+  agentId: text("agent_id").notNull().references(() => localAgentSessions.id), instanceId: text("instance_id").notNull(), threadId: text("thread_id").notNull(),
+  createdHere: integer("created_here").notNull(), identityVerified: integer("identity_verified").notNull(), origin: text("origin").notNull(),
+  title: text("title").notNull(), nameStatus: text("name_status").notNull().default("pending"), externalActivity: integer("external_activity").notNull().default(0),
+  protected: integer("protected").notNull().default(0), archiveState: text("archive_state").notNull().default("active"), revision: integer("revision").notNull().default(1),
+  createdAt: text("created_at").notNull(), updatedAt: text("updated_at").notNull(),
+}, (table) => [uniqueIndex("console_thread_identity").on(table.instanceId, table.threadId), index("console_threads_project").on(table.projectId, table.updatedAt)]);
+export const consoleExecutions = sqliteTable("console_executions", {
+  id: text("id").primaryKey(), runId: text("run_id").notNull().references(() => consoleWorkRuns.id), agentId: text("agent_id").notNull().references(() => localAgentSessions.id),
+  provider: text("provider").notNull(), managedThreadId: text("managed_thread_id").references(() => consoleThreads.id), providerTurnId: text("provider_turn_id"),
+  status: text("status").notNull(), requested: integer("requested").notNull().default(0), providerFinished: integer("provider_finished").notNull().default(0),
+  baseline: text("baseline"), cumulative: text("cumulative"), delta: text("delta"), usageQuality: text("usage_quality").notNull().default("not_used"),
+  boundaryReason: text("boundary_reason").notNull().default("no_provider_request"), requestedModel: text("requested_model"), requestedEffort: text("requested_effort"),
+  createdAt: text("created_at").notNull(), finishedAt: text("finished_at"),
+}, (table) => [index("console_exec_run").on(table.runId, table.createdAt), index("console_exec_agent").on(table.agentId, table.createdAt),
+  uniqueIndex("console_exec_provider_turn").on(table.managedThreadId, table.providerTurnId).where(sql`${table.providerTurnId} is not null`)]);
+export const consoleArchiveBatches = sqliteTable("console_archive_batches", {
+  id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => consoleProjects.id), mode: text("mode").notNull(),
+  status: text("status").notNull(), requestHash: text("request_hash").notNull(), acceptPartial: integer("accept_partial").notNull(), externalIdle: integer("external_idle").notNull(),
+  createdAt: text("created_at").notNull(), expiresAt: text("expires_at").notNull(), updatedAt: text("updated_at").notNull(),
+});
+export const consoleArchiveEntries = sqliteTable("console_archive_entries", {
+  batchId: text("batch_id").notNull().references(() => consoleArchiveBatches.id), managedThreadId: text("managed_thread_id").notNull().references(() => consoleThreads.id),
+  expectedRevision: integer("expected_revision").notNull(), expectedSnapshot: text("expected_snapshot"), status: text("status").notNull(), reason: text("reason"), updatedAt: text("updated_at").notNull(),
+}, (table) => [primaryKey({ columns: [table.batchId, table.managedThreadId] })]);

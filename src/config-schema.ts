@@ -70,6 +70,11 @@ export const devspaceConfigSchema = z.object({
   storage: storageConfigSchema,
   tools: toolsConfigSchema,
   ui: uiConfigSchema,
+  console: z.object({
+    enabled: z.boolean().default(true),
+    allowRemote: z.boolean().default(false),
+    sessionTtlSeconds: z.number().int().min(300).max(86400).default(3600),
+  }).strict().prefault({}),
   artifacts: artifactsConfigSchema,
   skills: skillsConfigSchema,
   subagents: subagentsConfigSchema.default({ enabled: false, providers: [] }),

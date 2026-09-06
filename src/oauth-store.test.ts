@@ -52,6 +52,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 8, name: "idempotent-agent-task-identity" },
       { version: 9, name: "provider-usage-snapshots" },
       { version: 10, name: "bounded-read-admission-and-context-affinity" },
+      { version: 11, name: "project-console-work-ledger" },
     ]);
   } finally {
     database.close();

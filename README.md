@@ -60,7 +60,18 @@ Inspect directly with `read` and `workspace_context` before delegating: context 
   <a href="https://x.com/wshxnv">Get in touch to become one.</a>
 </p>
 
+## Project task console
+
+The independent `/console/` page shows project work, caller provenance, acceptance,
+Codex token receipts and managed chat archival. It is local-only by default and uses
+the existing owner secret with a separate authenticated browser session. Begin work
+with `work_task`, propagate workRunId even for host-only operations, and finish with
+acceptance evidence so the response and page share one receipt. Only proven, inactive,
+accepted DevSpace conversations enter a confirmed project archive batch. See
+[project console and verification boundaries](docs/project-console.md) before rollout.
+
 ## Installation
+
 
 DevSpace requires Node `>=22.19 <27`.
 

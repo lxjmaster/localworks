@@ -2,6 +2,7 @@ import * as z from "zod/v4";
 import { registerAgentTaskTool } from "./agent-task.js";
 import { applyPatch } from "../apply-patch.js";
 import type { ProcessSnapshot } from "../process-sessions.js";
+import { trackedWork } from "./work-task.js";
 import {
   EDIT_TOOL_ANNOTATIONS,
   SHELL_TOOL_ANNOTATIONS,
@@ -21,7 +22,7 @@ type CodexRegistration = (context: ToolRegistrationContext) => void;
 const CODEX_INSTRUCTIONS = `Read project context directly as the host with ${toolNames.read} or workspace_context before deciding to delegate. Those tools do not invoke Codex. Do not start a worker just to browse directories, summarize known logs or wait. Use apply_patch for file modifications, exec_command for commands, and write_stdin for running processes. Use agent_task (not shell wrappers) for subagent control. Provide only relevant host-prepared evidence, continue related sessions, and use a separate context when independent review is needed. Verified readers share bounded source access; mutations and unknown-effect commands remain exclusive. Declare shared build/device resources across worktrees. Never bypass claims using another path or state directory. Shell commands still have local-user authority, not an OS sandbox. Follow workspace instructions and applicable skills.`;
 
 export function codexInstructions(): string {
-  return CODEX_INSTRUCTIONS;
+  return "Begin a work_task run even for host-only work; propagate workRunId through read/context/mutation/command/agent tools. Finish with acceptance evidence after child operations stop and include the returned Codex usage and completeness in the final answer. " + CODEX_INSTRUCTIONS;
 }
 
 export function registerCodexTools(context: ToolRegistrationContext): void {
@@ -86,6 +87,7 @@ function registerApplyPatchTool(context: ToolRegistrationContext): void {
         "Apply one Codex-style patch in a workspace. Supports adding, overwriting, updating, deleting, and moving files. Use this for all file modifications. Paths must be relative to the workspace.",
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
+        workRunId: z.string().optional(),
         patch: z
           .string()
           .describe(
@@ -105,7 +107,7 @@ function registerApplyPatchTool(context: ToolRegistrationContext): void {
       }),
       annotations: EDIT_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, patch }) => {
+    async ({ workspaceId, workRunId, patch }) => {
       const startedAt = performance.now();
       const applied = await runLoggedToolOperation(
         config,
@@ -113,7 +115,8 @@ function registerApplyPatchTool(context: ToolRegistrationContext): void {
         startedAt,
         async () => {
           const workspace = workspaces.getWorkspace(workspaceId);
-          return processSessions.mutate(workspace.root, () => applyPatch(workspace.root, patch));
+          return trackedWork(config.stateDir, workRunId, { root: workspace.root, workspaceId }, "apply_patch",
+            () => processSessions.mutate(workspace.root, () => applyPatch(workspace.root, patch)));
         },
       );
       const paths = applied.files.map((file) => file.path).join(", ");
@@ -145,6 +148,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),
+        workRunId: z.string().optional().describe("Work run whose command remains active until the process exits, not merely until the first yield."),
         resources: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/)).max(16).optional()
           .describe("Additional exclusive resource keys for shared build outputs/devices. Checkout exclusion is automatic."),
         tty: z
@@ -196,6 +200,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
     async ({
       workspaceId,
       cmd,
+      workRunId,
       tty,
       columns,
       rows,
@@ -224,6 +229,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
           return processSessions.start({
             workspaceId,
             command: cmd,
+            workRunId,
             cwd,
             workspaceRoot: workspace.root,
             tty,

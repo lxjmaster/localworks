@@ -151,6 +151,13 @@ and concurrency policy. See [coordination and migration notes](configuration.md#
 
 ## Tool Names
 
+Use `work_task begin` before the top-level task, including work performed entirely
+by direct host tools. Propagate its workRunId to reads, mutations, commands and
+agent tasks. `work_task finish` requires terminal child work and explicit acceptance;
+use its Codex token total and completeness in the final answer. The independent
+`/console/` displays the same receipt. Historical or external Codex usage is not
+silently assigned to the current task. See [project console](project-console.md).
+
 Gather context with the host first. `read` and `workspace_context` are deterministic
 local tools, not Codex calls. The latter lists one directory, captures selected ranges
 with whole-file hashes, and performs literal searches in selected files. Applicable
@@ -164,6 +171,7 @@ The Claude surface exposes these tool names:
 - `open_workspace`
 - `read`
 - `workspace_context`
+- `work_task`
 - `agent_task`
 - `write`
 - `edit`
@@ -175,6 +183,7 @@ DevSpace uses the Codex-style surface by default. It exposes:
 - `open_workspace`
 - `read`
 - `workspace_context`
+- `work_task`
 - `agent_task`
 - `apply_patch`
 - `exec_command`

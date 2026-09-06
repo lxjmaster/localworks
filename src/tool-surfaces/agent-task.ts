@@ -5,6 +5,8 @@ import { createLocalAgentClient, type LocalAgentClient } from "../local-agent-cl
 import { presentAgentObservation, presentAgentReceipt, presentAgentSummary } from "../local-agent-presentation.js";
 import { LocalAgentStore } from "../local-agent-store.js";
 import type { ToolRegistrationContext } from "./types.js";
+import { WorkLedger } from "../work-ledger.js";
+import { hostOrigin } from "./work-task.js";
 
 type AgentClient = Pick<LocalAgentClient, "start" | "continue" | "get" | "list"> & Partial<Pick<LocalAgentClient, "cancelQueued">>;
 
@@ -25,6 +27,7 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
         .describe("Stable identity for one initial task. Repeating the same start returns its existing agent without a new model call; use continue for new instructions."),
       readOnly: z.boolean().optional(),
       workItemId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/).optional(),
+      workRunId: z.string().optional().describe("Top-level run returned by work_task begin. Required on continue; bind all related Codex turns to this run for accurate completion receipts."),
       contextKey: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/).optional()
         .describe("Explicit problem-domain/role affinity, not the source SHA. Requires workItemId; an idle matching thread is resumed instead of creating a new context."),
       freshContext: z.boolean().optional().describe("Use a separate context for unrelated work or independent acceptance review; do not prewarm idle workers."),
@@ -71,17 +74,25 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
       try { return reply(store.usage(authorized.value.id)); } finally { store.close(); }
     }
     const overrides = { model: input.model, effort: input.effort, writeMode: input.readOnly ? "read_only" as const : undefined,
-      context: input.context, resources: input.resources, requestKey: input.requestKey };
+      context: input.context, resources: input.resources, requestKey: input.requestKey, workRunId: input.workRunId };
     if (input.action === "start" || input.action === "continue") {
-      if (!input.prompt || (input.action === "start" ? (!input.target || !input.taskKey || !input.workItemId) : (!input.agentId || !input.requestKey))) {
-        return reply({ code: "INVALID_TASK", message: "start needs target, stable taskKey, workItemId and prompt; continue needs agentId, requestKey and prompt." }, true);
+      if (!input.prompt || (input.action === "start" ? (!input.target || !input.taskKey || !input.workItemId) : (!input.agentId || !input.requestKey || !input.workRunId))) {
+        return reply({ code: "INVALID_TASK", message: "start needs target, taskKey, workItemId and prompt; continue needs agentId, requestKey, workRunId and prompt." }, true);
       }
+      const ledger = new WorkLedger(config.stateDir);
+      try {
+        if (input.workRunId) ledger.requireScope(input.workRunId, workspace.root, workspace.id);
+        else overrides.workRunId = ledger.begin({ root: workspace.root, workspaceId: workspace.id, workItemId: input.workItemId!,
+          runKey: `delegation:${input.taskKey!}`, title: `DevSpace · ${input.workItemId!}`.slice(0, 160),
+          origin: hostOrigin(extra, server.server.getClientVersion()?.name) }).id;
+      } catch (error) { return reply({ code: "WORK_STATE", message: error instanceof Error ? error.message : "Cannot bind work run." }, true); }
+      finally { ledger.close(); }
       const result = input.action === "start"
         ? await agents.start({ ...scope, ...overrides, target: input.target!, prompt: input.prompt, taskKey: input.taskKey,
             workItemId: input.workItemId, contextKey: input.contextKey, freshContext: input.freshContext })
         : await agents.continue(input.agentId!, input.prompt, overrides, scope);
       if (result.isErr()) return reply({ code: result.error.code, message: result.error.message, retryable: result.error.retryable }, true);
-      return reply({ ...presentAgentReceipt(result.value), contextKey: result.value.contextKey, workItemId: result.value.workItemId,
+      return reply({ ...presentAgentReceipt(result.value), workRunId: overrides.workRunId, contextKey: result.value.contextKey, workItemId: result.value.workItemId,
         contextMode: result.value.providerSessionId ? "resume" : "new", hostContextProvided: Boolean(input.context) });
     }
     if (!input.agentId) return reply({ code: "INVALID_TASK", message: "observe needs agentId." }, true);
@@ -90,12 +101,22 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
       const found = await agents.get(input.agentId, scope);
       if (found.isErr()) return reply({ code: found.error.code, message: found.error.message }, true);
       const record = found.value;
-      const revision = createHash("sha256").update(JSON.stringify([record.updatedAt, record.status, record.latestResponse, record.error])).digest("hex");
+      const ledger = new WorkLedger(config.stateDir);
+      let completionReceipt: ReturnType<WorkLedger["receipt"]> | null = null;
+      try {
+        const execution = ledger.latestExecution(record.id);
+        if (execution) {
+          ledger.requireScope(execution.run_id, workspace.root, workspace.id);
+          completionReceipt = ledger.receipt(execution.run_id);
+        }
+      } finally { ledger.close(); }
+      const revision = createHash("sha256").update(JSON.stringify([record.updatedAt, record.status, record.latestResponse, record.error, completionReceipt])).digest("hex");
       const running = record.status === "queued" || record.status === "running" || record.status === "starting";
       if (!running || Date.now() >= deadline || (input.knownRevision && revision !== input.knownRevision)) {
         if (revision === input.knownRevision) return reply({ id: record.id, status: presentAgentReceipt(record).status, revision, unchanged: true });
         const observation = presentAgentObservation(input.includeResponse ? record : { ...record, latestResponse: undefined });
-        return reply({ ...observation, revision, responseAvailable: Boolean(record.latestResponse) });
+        return reply({ ...observation, revision, responseAvailable: Boolean(record.latestResponse),
+          completionReceipt, codexUsageStatus: completionReceipt?.usageStatus ?? "unavailable" });
       }
       await delay(Math.min(500, Math.max(0, deadline - Date.now())), undefined, { signal: extra.signal });
     }
