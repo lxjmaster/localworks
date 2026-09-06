@@ -12,6 +12,7 @@ import {
 } from "./local-agent-errors.js";
 import { removeDevspaceNodeModulesBinFromPath } from "./local-agent-path.js";
 import { parseCodexUsage } from "./agent-usage.js";
+import { ensureDesktopProject, type ProjectReceipt } from "./codex-projects.js";
 import { terminateProcessTree } from "./process-platform.js";
 import type {
   LocalAgentDriver,
@@ -80,6 +81,7 @@ export interface CodexAppServerRuntimeOptions {
   command: string;
   env: NodeJS.ProcessEnv;
   version?: string;
+  registerProject?: (roots: string[], threadIds: string[], env: NodeJS.ProcessEnv) => Promise<ProjectReceipt>;
 }
 
 export type CodexControlMethod = "account/read" | "thread/read" | "thread/list" | "thread/loaded/list" |
@@ -161,6 +163,15 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
           });
         }
         let threadConfig: Record<string, unknown> = {};
+        const register = async (threadIds: string[]) => {
+          const receipt = await this.options.registerProject?.([input.workspaceRoot], threadIds, this.options.env);
+          if (receipt?.status === "partial") throw new AgentProviderUnavailableError({
+            code: "PROVIDER_UNAVAILABLE", provider: "codex", operation: "register_project", retryable: false,
+            message: JSON.stringify(receipt),
+          });
+        };
+        // Registration failure is a control-plane partial result, never a reason to launch/retry inference.
+        await register(input.providerSessionId ? [input.providerSessionId] : []);
         let developerInstructions: string | undefined;
         if (input.analysisOnly || input.profileInstructions) {
           // Pure configuration RPC: no model request and no global config mutation.
@@ -220,6 +231,7 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
           try { await this.control("thread/name/set", { threadId, name: input.sessionLabel }); callbacks?.onNameResult?.(true); }
           catch { callbacks?.onNameResult?.(false); }
         }
+        await register([threadId]);
         await callbacks?.onRequest?.();
         const completed = await this.rpc.runTurn(threadId, turnParams(input, threadId), (value) => {
           const usage = parseCodexUsage(value);
@@ -359,6 +371,7 @@ export class CodexLocalAgentDriver implements LocalAgentDriver {
           command: command.executable,
           env: codexCommandEnvironment(this.env),
           version: command.version,
+          registerProject: ensureDesktopProject,
         });
         try {
           await runtime.initialize();

@@ -334,6 +334,7 @@ export class WorkLedger {
       codexThreads: threadIds.length, codexThreadsCreated: createdThreads,
       codexThreadsReused: threadIds.length - createdThreads, receiptRevision: run.revision,
       accountingScope: "managed_codex_executions",
+      evidence: JSON.parse(run.evidence) as Evidence[],
       origin: JSON.parse(run.origin) as WorkOrigin, finishedAt: run.finished_at,
       note: "Provider token observations, not a subscription balance or invoice. Cache input and reasoning output are already included in totals. Missing boundaries are never counted as zero." };
   }

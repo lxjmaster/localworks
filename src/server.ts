@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { ensureDesktopProject } from "./codex-projects.js";
+import { WorkLedger as ProjectWorkLedger } from "./work-ledger.js";
 import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -315,6 +317,7 @@ export function createMcpServer(
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
   trackToolActivity?: TrackToolActivity,
+  registerProject: typeof ensureDesktopProject = ensureDesktopProject,
 ): McpServer {
   const toolSurface = getToolSurface(config.toolMode);
   const server = new McpServer(
@@ -333,6 +336,7 @@ export function createMcpServer(
     resolveLocalAgentProviders,
     incomingArtifactAdapters,
     trackToolActivity,
+    registerProject,
   );
   return server;
 }
@@ -346,6 +350,7 @@ function registerMcpSurface(
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
   trackToolActivity?: TrackToolActivity,
+  registerProject: typeof ensureDesktopProject = ensureDesktopProject,
 ): void {
   const registrationTarget = trackToolActivity
     ? withTrackedToolHandlers(server, trackToolActivity)
@@ -391,6 +396,7 @@ function registerMcpSurface(
       description:
         "Start work in a project directory or isolated worktree when no usable workspaceId exists for it. During continued work, reuse the existing workspaceId instead of calling this tool again. By default this uses the actual checkout; set mode=\"worktree\" for isolated or parallel work.",
       inputSchema: {
+        createDirectory: z.boolean().optional().describe("Explicitly create a missing project directory inside an allowed root. Existing directories are reused."),
         path: z
           .string()
           .describe(
@@ -409,6 +415,7 @@ function registerMcpSurface(
       },
       outputSchema: {
         workspaceId: z.string(),
+        projectRegistration: z.unknown().optional(),
         root: z.string(),
         mode: z.enum(["checkout", "worktree"]),
         sourceRoot: z.string().optional(),
@@ -438,9 +445,9 @@ function registerMcpSurface(
         instruction: z.string(),
       },
       ...workspaceAppDescriptorMeta(config),
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: false },
     },
-    async ({ path, mode, baseRef }, { _meta }) => {
+    async ({ path, mode, baseRef, createDirectory }, { _meta }) => {
       const startedAt = performance.now();
       const {
         workspace,
@@ -449,9 +456,13 @@ function registerMcpSurface(
         workspaceReused,
         includeBootstrapContext,
       } = await workspaces.openWorkspace(
-        { path, mode, baseRef },
+        { path, mode, baseRef, createDirectory },
         { conversationScopeId: conversationScopeIdFromRequestMeta(_meta) },
       );
+      const projectLedger = new ProjectWorkLedger(config.stateDir);
+      let devspaceProjectId: string;
+      try { devspaceProjectId = projectLedger.project(workspace.root).id; } finally { projectLedger.close(); }
+      const projectRegistration = { devspaceProjectId, ...await registerProject([workspace.root]) };
       const review = await reviewCheckpoints.initializeWorkspace({
         workspaceId: workspace.id,
         root: workspace.root,
@@ -512,6 +523,7 @@ function registerMcpSurface(
                 : `Opened workspace ${workspace.id}.`,
             `Root: ${workspace.root}`,
             `Mode: ${workspace.mode}`,
+            `Project registration: ${JSON.stringify(projectRegistration)}`,
             loadedAgentsFiles.length > 0
               ? `Loaded project instructions: ${loadedAgentsFiles.map((file) => file.path).join(", ")}`
               : undefined,
@@ -570,6 +582,7 @@ function registerMcpSurface(
         },
         structuredContent: {
           workspaceId: workspace.id,
+          projectRegistration,
           root: workspace.root,
           mode: workspace.mode,
           sourceRoot: workspace.sourceRoot,
@@ -775,6 +788,7 @@ function withTrackedToolHandlers(
 
 export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
+  registerProject?: typeof ensureDesktopProject;
 }
 
 export function createServer(
@@ -822,6 +836,7 @@ export function createServer(
       resolveLocalAgentProviders,
       incomingArtifactAdapters,
       toolActivities.track,
+      options.registerProject,
     );
   });
   const logMcpHandlerError = (error: Error) => logEvent(

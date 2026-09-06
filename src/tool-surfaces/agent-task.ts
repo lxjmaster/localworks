@@ -113,7 +113,7 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
       const revision = createHash("sha256").update(JSON.stringify([record.updatedAt, record.status, record.latestResponse, record.error, completionReceipt])).digest("hex");
       const running = record.status === "queued" || record.status === "running" || record.status === "starting";
       if (!running || Date.now() >= deadline || (input.knownRevision && revision !== input.knownRevision)) {
-        if (revision === input.knownRevision) return reply({ id: record.id, status: presentAgentReceipt(record).status, revision, unchanged: true });
+        if (revision === input.knownRevision && !input.includeResponse) return reply({ id: record.id, status: presentAgentReceipt(record).status, revision, unchanged: true });
         const observation = presentAgentObservation(input.includeResponse ? record : { ...record, latestResponse: undefined });
         return reply({ ...observation, revision, responseAvailable: Boolean(record.latestResponse),
           completionReceipt, codexUsageStatus: completionReceipt?.usageStatus ?? "unavailable" });

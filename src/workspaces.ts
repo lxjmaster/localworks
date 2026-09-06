@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { normalizeProjectPath, prepareProjectRoots } from "./codex-projects.js";
 import type { Stats } from "node:fs";
 import type {
   WorkspaceConversationBinding,
@@ -74,6 +75,7 @@ type InitialAgentsFileSource = "global" | "workspace";
 
 export interface OpenWorkspaceInput {
   path: string;
+  createDirectory?: boolean;
   mode?: WorkspaceMode;
   baseRef?: string;
 }
@@ -103,7 +105,9 @@ export class WorkspaceRegistry {
     input: string | OpenWorkspaceInput,
     openOptions: OpenWorkspaceOptions = {},
   ): Promise<WorkspaceContext> {
-    const workspaceInput = typeof input === "string" ? { path: input } : input;
+    let workspaceInput = typeof input === "string" ? { path: input } : input;
+    await prepareProjectRoots([workspaceInput.path], this.config.allowedRoots, workspaceInput.createDirectory ?? false);
+    workspaceInput = { ...workspaceInput, path: assertAllowedPath(normalizeProjectPath(workspaceInput.path), this.config.allowedRoots) };
     const conversationScopeId = openOptions.conversationScopeId;
     if (!conversationScopeId || !this.store) {
       return this.openNewWorkspace(workspaceInput);
@@ -323,7 +327,7 @@ export class WorkspaceRegistry {
 
   private async openCheckoutWorkspace(path: string): Promise<WorkspaceContext> {
     const root = assertAllowedPath(path, this.config.allowedRoots);
-    const rootStats = await ensureCheckoutWorkspaceRoot(root);
+    const rootStats = await stat(root);
     if (!rootStats.isDirectory()) {
       throw new Error(`Workspace root must be a directory: ${path}`);
     }

@@ -66,6 +66,13 @@ test("native MCP control observes an occupied checkout without shell claims and 
   assert.equal(brief.responseAvailable, true); assert.equal(brief.response, undefined);
   const expanded = await call({ action: "observe", agentId: record.id, includeResponse: true, waitMs: 0 });
   assert.equal(expanded.response, "completed evidence");
+  const recovered = await call({ action: "observe", agentId: record.id, includeResponse: true, waitMs: 0,
+    knownRevision: brief.revision });
+  assert.equal(recovered.response, "completed evidence", "A saved revision must not hide explicitly requested terminal output after reconnect");
+  const replayed = await call({ action: "observe", agentId: record.id, includeResponse: true, waitMs: 0,
+    knownRevision: recovered.revision });
+  assert.equal(replayed.response, "completed evidence");
+  assert.equal(starts.length, 1, "Recovery never launches a model");
   const claims = await call({ action: "claims" });
   assert.equal((claims.claims as unknown[]).length, 1);
   const usage = await call({ action: "usage", agentId: record.id });

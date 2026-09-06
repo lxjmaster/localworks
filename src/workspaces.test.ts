@@ -91,11 +91,12 @@ test("workspace instruction symlinks cannot escape the workspace", {
   );
 });
 
-test("opening a missing checkout creates its workspace root", async (t) => {
+test("opening a missing checkout requires explicit creation and then reuses its directory", async (t) => {
   const context = await fixture(t);
   const missingRoot = join(context.root, "missing", "workspace");
 
-  const opened = await context.registry.openWorkspace(missingRoot);
+  await assert.rejects(context.registry.openWorkspace(missingRoot), /createDirectory=true/);
+  const opened = await context.registry.openWorkspace({ path: missingRoot, createDirectory: true });
   assert.equal(opened.workspace.root, missingRoot);
   assert.equal((await stat(missingRoot)).isDirectory(), true);
 });

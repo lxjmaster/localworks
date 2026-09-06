@@ -6,6 +6,17 @@ import { join } from "node:path";
 import { LocalAgentStore } from "./local-agent-store.js";
 import { WorkLedger } from "./work-ledger.js";
 
+test("successful artifact evidence survives failure of the overall acceptance", (t) => {
+  const f = fixture(t);
+  const run = f.begin("artifact-partial");
+  const evidence = [{ label: "APK generated", reference: "artifact:apk-fixture", outcome: "passed" as const },
+    { label: "Device installation", reference: "check:device", outcome: "failed" as const }];
+  const receipt = f.ledger.finish(run.id, { status: "failed", acceptance: "failed", summary: "APK ready; installation failed", evidence });
+  assert.equal(receipt.acceptanceStatus, "failed");
+  assert.deepEqual(receipt.evidence, evidence);
+  assert.deepEqual(f.ledger.receipt(run.id).evidence, evidence, "Recovery preserves per-artifact facts independently of total goal status");
+});
+
 function fixture(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), "devspace-work-ledger-"));
   const project = join(root, "project"); mkdirSync(join(project, ".git"), { recursive: true });

@@ -20,6 +20,11 @@ import { createMcpServer, createServer } from "./server.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 import { writeTestDevspaceConfig } from "./test-support/config.test.js";
+import type { ensureDesktopProject } from "./codex-projects.js";
+
+const registerProject: typeof ensureDesktopProject = async (roots) => ({
+  protocol: "fixture", status: "persisted_registration", roots, createdDirectories: [], projectId: "fixture-project", uiStatus: "unverified",
+});
 
 const execFileAsync = promisify(execFile);
 
@@ -30,7 +35,7 @@ test("console redirect preserves queries and does not redirect its own destinati
     workspaces: { allowedRoots: [root], worktreeRoot: join(root, "worktrees") },
     subagents: { enabled: false, providers: [] },
   }));
-  const server = createServer({ ...config, console: { enabled: false, allowRemote: false, sessionTtlSeconds: 300 } });
+  const server = createServer({ ...config, console: { enabled: false, allowRemote: false, sessionTtlSeconds: 300 } }, { registerProject });
   const http = server.app.listen(0, "127.0.0.1");
   t.after(async () => {
     await new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve()));
@@ -209,6 +214,10 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
   const tools = await context.client.listTools();
   const openTool = tools.tools.find((tool) => tool.name === "open_workspace");
   const outputProperties = (openTool?.outputSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+  assert.ok(outputProperties && "projectRegistration" in outputProperties);
+  assert.ok("createDirectory" in (openTool!.inputSchema.properties ?? {}));
+  assert.equal(openTool?.annotations?.readOnlyHint, false);
+  assert.equal((structuredContent(first).projectRegistration as { status: string }).status, "persisted_registration");
   assert.equal(outputProperties && "workspaceReused" in outputProperties, false);
   assert.equal(outputProperties && "includeBootstrapContext" in outputProperties, false);
   const providerSchema = outputProperties?.agentProviders as {
@@ -540,7 +549,7 @@ async function httpServerFixture(
     },
     storage: { stateDir: join(root, ".state") },
   }));
-  const running = createServer(config, { incomingArtifactAdapters: [] });
+  const running = createServer(config, { incomingArtifactAdapters: [], registerProject });
   const httpServer = running.app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => httpServer.once("listening", resolve));
 
@@ -644,6 +653,8 @@ async function fixture(
     new ProcessSessionManager(),
     resolveLocalAgentProviders,
     [],
+    undefined,
+    registerProject,
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
