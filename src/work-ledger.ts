@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import { canonicalExecutionRoot } from "./execution-coordinator.js";
 import type { AgentUsageObservation, TokenCounts } from "./agent-usage.js";
+import { managedSessionTitle } from "./managed-session-title.js";
 
 export type UsageQuality = "complete" | "partial" | "unavailable" | "not_used";
 export type WorkOrigin = {
@@ -46,11 +47,22 @@ const countKeys = ["inputTokens", "cachedInputTokens", "cacheWriteInputTokens", 
 const zero = (): TokenCounts => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
 const active = (status: string) => ["starting", "queued", "running"].includes(status);
 
+/** Absence of a callback is not proof that no request was sent. Old pooled
+ * executions can have a successful result with all lifecycle fields missing. */
+export function executionUsage(row: ExecutionRow): { usageStatus: UsageQuality; codexUsage: TokenCounts | null } {
+  const possiblyUsed = row.requested !== 0 || row.provider_turn_id !== null || row.provider_finished !== 0 ||
+    row.cumulative !== null || row.delta !== null || row.usage_quality !== "not_used" ||
+    row.status === "completed" || row.boundary_reason === "provider_dispatch_unconfirmed";
+  if (!possiblyUsed) return { usageStatus: "not_used", codexUsage: zero() };
+  if (!row.delta) return { usageStatus: "unavailable", codexUsage: null };
+  return { usageStatus: row.usage_quality === "complete" ? "complete" : "partial", codexUsage: JSON.parse(row.delta) as TokenCounts };
+}
+
 export function summarizeExecutions(rows: ExecutionRow[]): UsageSummary {
   const codex = rows.filter((row) => row.provider === "codex");
-  const requested = codex.filter((row) => row.requested !== 0);
+  const requested = codex.filter((row) => executionUsage(row).usageStatus !== "not_used");
   const contributing = requested.filter((row) => row.delta !== null);
-  const missing = requested.filter((row) => row.usage_quality !== "complete").length;
+  const missing = requested.filter((row) => executionUsage(row).usageStatus !== "complete").length;
   let totals: TokenCounts | null = requested.length === 0 ? zero() : contributing.length === 0 ? null : zero();
   if (contributing.length) {
     const values = contributing.map((row) => JSON.parse(row.delta!) as TokenCounts);
@@ -218,7 +230,7 @@ export class WorkLedger {
   }
   sessionTitle(runId: string): string {
     const run = this.run(runId); const project = this.getProject(run.project_id);
-    return `[DevSpace][${project.name}][${run.id.slice(-6)}] ${run.title ?? "Task"}`.replace(/[\r\n\x00-\x1f]/g, " ").slice(0, 160);
+    return managedSessionTitle(project.name, run.id.slice(-6), run.title ?? "Task");
   }
   nameResult(executionId: string, success: boolean): void {
     const execution = this.execution(executionId);
@@ -230,6 +242,14 @@ export class WorkLedger {
     this.db.prepare("update console_executions set requested=1,status='running',usage_quality='unavailable' where id=?").run(executionId);
     this.touch(row.run_id);
   }
+  providerDispatchStarted(executionId: string): void {
+    const row = this.execution(executionId);
+    // Written by the manager BEFORE entering the pool, independent of adapter
+    // callbacks. If the process/adapter fails, uncertainty must not become zero.
+    this.db.prepare("update console_executions set usage_quality='unavailable',boundary_reason='provider_dispatch_unconfirmed' where id=? and requested=0")
+      .run(executionId);
+    this.touch(row.run_id);
+  }
   requestedConfiguration(executionId: string, model?: string, effort?: string): void {
     this.db.prepare("update console_executions set requested_model=?,requested_effort=? where id=?").run(model ?? null, effort ?? null, executionId);
   }
@@ -237,7 +257,7 @@ export class WorkLedger {
     if (!turnId || turnId.length > 256) throw new Error("Invalid provider turn identity.");
     const row = this.execution(executionId);
     if (row.provider_turn_id && row.provider_turn_id !== turnId) throw new Error("Execution already belongs to another provider turn.");
-    this.db.prepare("update console_executions set provider_turn_id=? where id=?").run(turnId, executionId);
+    this.db.prepare("update console_executions set provider_turn_id=?,requested=1 where id=?").run(turnId, executionId);
     this.touch(row.run_id);
   }
   usage(executionId: string, observation: AgentUsageObservation): void {
@@ -290,6 +310,9 @@ export class WorkLedger {
   endExecution(executionId: string, status: string): void {
     const row = this.execution(executionId);
     this.db.prepare("update console_executions set status=?,finished_at=? where id=?").run(status, now(), executionId);
+    if (row.provider === "codex" && status === "completed" && !row.requested && !row.delta) {
+      this.db.prepare("update console_executions set usage_quality='unavailable',boundary_reason='missing_lifecycle_events' where id=?").run(executionId);
+    }
     this.touch(row.run_id);
   }
 
@@ -370,15 +393,14 @@ export class WorkLedger {
     return { ...this.receipt(runId), summary: run.summary, evidence: JSON.parse(run.evidence) as Evidence[],
       operations: this.db.prepare("select id,kind,label,status,evidence,created_at,finished_at from console_operations where run_id=? order by created_at").all(runId),
       turns: this.executions(runId).map((row) => ({ executionId: row.id, agentId: row.agent_id, providerTurnId: row.provider_turn_id,
-        managedThreadId: row.managed_thread_id, status: row.status, usageStatus: row.usage_quality,
-        codexUsage: row.delta ? JSON.parse(row.delta) : row.requested ? null : zero(), boundary: row.boundary_reason,
+        managedThreadId: row.managed_thread_id, status: row.status, ...executionUsage(row), boundary: row.boundary_reason,
         requestedModel: row.requested_model, requestedEffort: row.requested_effort, createdAt: row.created_at, finishedAt: row.finished_at })) };
   }
   projectUsage(projectId: string, after = "") {
     const rows = this.db.prepare(`select e.* from console_executions e join console_work_runs r on r.id=e.run_id where r.project_id=? and r.created_at>=?`)
       .all(projectId, after) as ExecutionRow[];
     const runs = this.db.prepare("select id,status,acceptance from console_work_runs where project_id=? and created_at>=?").all(projectId, after) as { id: string; status: string; acceptance: string }[];
-    const missing = new Set(rows.filter((row) => row.requested && row.usage_quality !== "complete").map((row) => row.run_id));
+    const missing = new Set(rows.filter((row) => row.provider === "codex" && ["unavailable", "partial"].includes(executionUsage(row).usageStatus)).map((row) => row.run_id));
     return { ...summarizeExecutions(rows), taskCount: runs.length,
       activeTasks: runs.filter((run) => run.status === "running").length,
       pendingAcceptance: runs.filter((run) => run.acceptance === "pending").length,

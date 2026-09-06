@@ -124,6 +124,9 @@ export class LocalAgentRuntimePool {
       }
     };
     const callbacks: LocalAgentRunCallbacks = {
+      // Interpose only the session reservation. Preserve every other lifecycle
+      // callback, including future additions, across this wrapper boundary.
+      ...inputCallbacks,
       onSessionId: async (providerSessionId) => {
         const reservationError = await reserveSession(providerSessionId);
         if (reservationError) throw reservationError;

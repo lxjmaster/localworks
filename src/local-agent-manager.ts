@@ -533,6 +533,7 @@ export class LocalAgentManager {
         },
       };
       // An older/uninstrumented Codex adapter must never turn unknown paid work into zero.
+      if (executionId && record.provider === "codex") this.ledger.providerDispatchStarted(executionId);
       if (executionId && record.provider === "codex" && !driver.value.reportsWorkLifecycle) this.ledger.requestStarted(executionId);
       const result = await this.pool.run(driver.value, context, input.value, callbacks);
       if (result.isErr()) {

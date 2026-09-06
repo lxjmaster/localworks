@@ -8,6 +8,10 @@ import { CodexAppServerRuntime, codexInstanceIdentity, type CodexControlMethod }
 import type { LocalAgentRunCallbacks } from "./local-agent-runtime.js";
 import { LocalAgentStore } from "./local-agent-store.js";
 import { WorkLedger } from "./work-ledger.js";
+import { LocalAgentRuntimePool } from "./local-agent-runtime-pool.js";
+import { Result } from "better-result";
+import { LocalAgentManager } from "./local-agent-manager.js";
+import type { LocalAgentDriver } from "./local-agent-runtime.js";
 
 test("real JSON-RPC path registers origin, names once, binds turns and includes late failed-turn usage", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "devspace-work-rpc-")); const project = join(root, "project"); mkdirSync(project);
@@ -35,7 +39,11 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(li
   const agent = store.create({ workspaceRoot: project, profileName: "codex", provider: "codex" });
   const run = ledger.begin({ root: project, title: "Protocol fixture", workItemId: "fixture", runKey: "one", origin: { entryPoint: "other_mcp", evidence: "server_entry" } });
   const runtime = new CodexAppServerRuntime({ command, env: process.env, version: "fixture" });
-  t.after(async () => { await runtime.close(); ledger.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
+  const pool = new LocalAgentRuntimePool();
+  let manager: LocalAgentManager | undefined;
+  const driver: LocalAgentDriver = { provider: "codex", runtimeKey: () => "fixture-pooled-runtime",
+    reportsWorkLifecycle: true, createRuntime: async () => Result.ok(runtime) };
+  t.after(async () => { await manager?.close(); await pool.close(); await runtime.close(); ledger.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
   await runtime.initialize();
   const execute = async (prompt: string, resume = false) => {
     const execution = ledger.beginExecution({ runId: run.id, agentId: agent.id, provider: "codex" });
@@ -44,7 +52,11 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(li
       onRequest: () => ledger.requestStarted(execution), onTurnStarted: (turnId) => ledger.turnStarted(execution, turnId),
       onUsage: (usage) => ledger.usage(execution, usage), onProviderFinished: () => ledger.providerFinished(execution),
     };
-    const result = await runtime.run({ prompt, workspaceRoot: project, sessionLabel: "[DevSpace][fixture] Test only", ...(resume ? { providerSessionId: "thread" } : {}) }, callbacks);
+    // Production does not invoke runtime.run directly: lifecycle callbacks cross
+    // the pooled-runtime wrapper. Losing them there used to report paid work as zero.
+    const result = await pool.run(driver,
+      { provider: "codex", agentId: agent.id, workspaceRoot: project },
+      { prompt, workspaceRoot: project, sessionLabel: "[DevSpace][fixture] Test only", ...(resume ? { providerSessionId: "thread" } : {}) }, callbacks);
     ledger.endExecution(execution, result.isOk() ? "completed" : "failed"); return result;
   };
   assert((await execute("first")).isOk()); assert.equal(ledger.receipt(run.id).codexUsage?.totalTokens, 100);
@@ -58,4 +70,29 @@ rl.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(li
   const identity = codexInstanceIdentity(command, { CODEX_HOME: root }, { account: { type: "chatgpt", email: "fixture@example.invalid" } });
   assert(identity.identityVerified); assert(!identity.instanceId.includes("fixture@"));
   assert.notEqual(identity.instanceId, codexInstanceIdentity(command, { CODEX_HOME: join(root, "other") }, { account: { type: "chatgpt", email: "fixture@example.invalid" } }).instanceId);
+
+  // Cross the COMPLETE production path too: manager -> pool -> real JSON-RPC
+  // adapter -> callbacks -> both ledgers. All provider responses remain synthetic.
+  store.update(agent.id, { status: "idle", providerSessionId: "thread" });
+  manager = new LocalAgentManager({ store: new LocalAgentStore(state), drivers: [driver], pool,
+    loadProfiles: async () => [], allowedRoots: [root],
+    subagents: { enabled: true, providers: [{ id: "codex", enabled: true }] } });
+  const next = await manager.continue(agent.id, "manager round trip",
+    { requestKey: "manager-round-trip", workRunId: run.id }, { workspaceRoot: project });
+  assert(next.isOk());
+  const deadline = Date.now() + 5000;
+  while (manager.activeTurnCount && Date.now() < deadline) await delay(10);
+  assert.equal(manager.activeTurnCount, 0);
+  const managed = ledger.latestExecution(agent.id)!;
+  assert.equal(managed.status, "completed");
+  assert.equal(managed.requested, 1);
+  assert.equal(managed.provider_finished, 1);
+  assert.equal(managed.provider_turn_id, "t3");
+  assert.equal(managed.usage_quality, "complete");
+  assert.equal(JSON.parse(managed.delta!).totalTokens, 100);
+  assert.equal(ledger.receipt(run.id).codexUsage?.totalTokens, 400);
+  const usageRows = ledger.db.prepare("select turn_id,totals from agent_usage_snapshots where agent_id=?").all(agent.id) as { turn_id: string; totals: string }[];
+  assert.equal(usageRows.length, 1);
+  assert.equal(usageRows[0]!.turn_id, "t3");
+  assert.equal(JSON.parse(usageRows[0]!.totals).totalTokens, 400);
 });
