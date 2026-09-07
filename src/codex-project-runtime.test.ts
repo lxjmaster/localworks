@@ -66,3 +66,35 @@ test("project partial blocks inference and preserves an already-created thread i
     assert(!(await readFile(log, "utf8")).includes('"turn/start"'));
   } finally { await runtime.close(); }
 });
+
+test("silent optional quota metadata is bounded and does not bypass project verification", { timeout: 15_000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-quota-silent-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, "fake.cjs"), log = join(root, "requests.jsonl");
+  await writeFile(source, `const fs=require('fs');require('readline').createInterface({input:process.stdin}).on('line',line=>{
+    const m=JSON.parse(line);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({method:m.method})+'\\n');
+    if(m.id==null||m.method==='account/rateLimits/read')return;
+    process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n');
+  });`);
+  const command = join(root, process.platform === "win32" ? "fake.cmd" : "fake");
+  await writeFile(command, process.platform === "win32" ? `@echo off\r\n"${process.execPath}" "${source}"\r\n` : `#!/bin/sh\nexec '${process.execPath}' '${source}'\n`);
+  await chmod(command, 0o700);
+  let registrations = 0;
+  const runtime = new CodexAppServerRuntime({ command, env: process.env,
+    registerProject: async (roots): Promise<ProjectReceipt> => {
+      registrations++;
+      return { protocol: "fixture", status: "partial", roots, createdDirectories: [], uiStatus: "unverified" };
+    },
+  });
+  try {
+    await runtime.initialize();
+    const before = Date.now();
+    const result = await runtime.run({ workspaceRoot: root, prompt: "fixture must not start inference" });
+    assert(result.isErr());
+    if (result.isErr()) assert.equal(result.error.operation, "register_project");
+    assert.equal(registrations, 1);
+    assert(Date.now() - before < 12_000, "optional probe must not wait the full 30-second lifecycle timeout");
+    const requests = await readFile(log, "utf8");
+    assert(!requests.includes('thread/start') && !requests.includes('thread/resume') && !requests.includes('turn/start'));
+  } finally { await runtime.close(); }
+});

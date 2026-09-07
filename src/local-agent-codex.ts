@@ -167,7 +167,9 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
         }
         let quota: ReturnType<typeof quotaPreflight> | undefined;
         try {
-          quota = quotaPreflight(await this.rpc.request("account/rateLimits/read", {}));
+          // Optional compatibility metadata must not add a full lifecycle RPC
+          // timeout to every turn when an older peer does not answer it.
+          quota = quotaPreflight(await this.rpc.request("account/rateLimits/read", {}, 5_000));
         } catch {
           // Older/API-key providers may not expose ChatGPT quota metadata.
           // Missing metadata is not zero quota and does not invent a restriction.
@@ -469,13 +471,13 @@ class CodexAppServerRpc {
     });
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown, timeoutMs = 30_000): Promise<unknown> {
     if (this.fatalError) return Promise.reject(this.fatalError);
     const id = String(this.nextId++);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pending.delete(id)) reject(new Error(`Codex RPC timed out: ${method}. Reconcile before replaying a lifecycle operation.`));
-      }, 30_000);
+      }, timeoutMs);
       timer.unref();
       this.pending.set(id, {
         resolve: (value) => { clearTimeout(timer); resolve(value); },
