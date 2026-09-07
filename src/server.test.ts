@@ -99,6 +99,29 @@ test("UI metadata is limited to workspace and aggregate review", async (t) => {
   }
 });
 
+test("MCP advertises explicit directory creation and preserves it through the real tool handler", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", uiEnabled: false });
+  const tool = (await context.client.listTools()).tools.find((entry) => entry.name === "open_workspace");
+  assert(tool);
+  const property = tool.inputSchema.properties?.createDirectory as { type?: string } | undefined;
+  assert.equal(property?.type, "boolean");
+  assert(!tool.inputSchema.required?.includes("createDirectory"));
+  const target = join(context.project, "new-explicit-project");
+  const missing = await context.client.callTool({ name: "open_workspace", arguments: { path: target },
+    _meta: { "openai/session": "new-project-contract" } });
+  assert.equal(missing.isError, true);
+  await assert.rejects(access(target));
+  const request = { name: "open_workspace", arguments: { path: target, createDirectory: true },
+    _meta: { "openai/session": "new-project-contract" } };
+  const created = await context.client.callTool(request);
+  assert(!created.isError);
+  await access(target);
+  const first = structuredContent(created);
+  assert.equal((first.projectRegistration as { projectId?: string }).projectId, "fixture-project");
+  const repeated = structuredContent(await context.client.callTool(request));
+  assert.equal(repeated.workspaceId, first.workspaceId);
+});
+
 test("open_workspace reports aggregate review availability", async (t) => {
   const plain = await fixture(t);
   const gitWorkspace = await fixture(t, { git: true });
