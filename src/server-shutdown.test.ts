@@ -95,3 +95,16 @@ await assert.rejects(
   ),
   httpCloseError,
 );
+
+const stages: string[] = [];
+await shutdownHttpServer({ close: (callback) => callback() }, async () => {}, (event) => stages.push(event));
+assert.deepEqual(stages, ["server_shutdown_started", "server_http_drained", "server_application_close_started", "server_application_closed", "server_shutdown_completed"]);
+
+let releaseCleanup: (() => void) | undefined;
+let failedBeforeCleanup = false;
+const failureDuringCleanup = shutdownHttpServer({ close: (callback) => callback(httpCloseError) }, () => new Promise<void>((resolve) => { releaseCleanup = resolve; }));
+const observedFailure = failureDuringCleanup.catch((error) => { failedBeforeCleanup = true; assert.equal(error, httpCloseError); });
+await new Promise((resolve) => setTimeout(resolve, 10));
+assert.equal(failedBeforeCleanup, false);
+releaseCleanup?.();
+await observedFailure;

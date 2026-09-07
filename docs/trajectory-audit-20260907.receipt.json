@@ -264,7 +264,38 @@
   },
   "report": {
     "path": "docs/trajectory-audit-20260907.md",
-    "sha256": "9c7cc0760ac13e599a4bada5566331c10c5fe377820b0bfce23a81e9d22200da"
+    "sha256": "9c7cc0760ac13e599a4bada5566331c10c5fe377820b0bfce23a81e9d22200da",
+    "hashScope": "original worker report before host append; immutable original snapshot remains in commit 50e1c62"
+  },
+  "hostReview": {
+    "parentRunId": "run_3f1a272be36b473a8534ed54ab530a6f",
+    "agentId": "agt_ed9f7c08",
+    "workerStopped": true,
+    "sourceFilesVerified": 5,
+    "testReceiptsVerified": 3,
+    "typecheckExitCode": 0,
+    "managedExecutionUsage": {
+      "status": "complete",
+      "inputTokens": 2321766,
+      "cachedInputTokens": 2219648,
+      "outputTokens": 29160,
+      "totalTokens": 2350926,
+      "scope": "parent run; child not_used is not the cost of this audit"
+    },
+    "parentTrajectoryMetadata": {
+      "path": "releases/trajectory-audit-20260907/parent-conversation-metadata.json",
+      "sha256": "59b53ab69ec626ebeb309b9db39cb79a462991cfee4ec150fa42cb6127a022c7",
+      "runs": 32,
+      "operations": 568,
+      "managedExecutions": 25,
+      "scope": "exact observed parent conversation; incomplete historical attribution remains explicit"
+    },
+    "childClosureAttempt": {
+      "accepted": false,
+      "code": "WORK_STATE",
+      "reason": "outside current workspace scope",
+      "retriedViaAnotherScope": false
+    }
   },
   "deployment": {
     "performed": false,

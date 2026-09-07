@@ -256,6 +256,12 @@ If a skill appears in `open_workspace`, the model should read that skill's
 `SKILL.md` before following it. DevSpace permits reads within advertised skill
 directories without tracking whether `SKILL.md` was read first.
 
+## Connector 502 or Missing Server
+
+For connector 502s or a serving process that disappears, see
+[server lifecycle diagnostics](server-diagnostics.md). Check the local listener
+before attributing a transport failure to a worker or replaying a task.
+
 ## Review Card Does Not Appear
 
 DevSpace attaches widget UI only to `open_workspace` and `show_changes`.

@@ -2,6 +2,8 @@
 
 本轮新增紧凑的 work-run 状态读取、兼容完整历史的分页，以及可校验的交付记录。实现复用现有 `console_operations`/`work_task record`，没有引入另一个调度器或存储平台。源码及独立候选验收与运行中的 MCP/agentd 分开；本轮没有部署或重启服务。
 
+> **主控范围更正（2026-09-07 15:51）**：下文 worker 自行创建的 `run_301f69671df142799eb9c18ee2d20a29` 属于子调用的 conversation，不是本 ChatGPT 会话的父运行；它的 0 executions 不能代表本轮没消耗 Codex。本轮真实父 run 为 `run_3f1a272be36b473a8534ed54ab530a6f`，对应 agent `agt_ed9f7c08`；正式账本统计 complete：input 2,321,766、output 29,160、total 2,350,926，缓存输入2,219,648已包含在input中。worker完成摘要里的“0/not_used”仅描述其子run，作为整个任务用量结论是错误的。以下原始观察保留为历史，主控补充数据见文末。
+
 ## 证据范围与量化限制
 
 起始 HEAD 为 `7a4b4a2ebf77a9ccc32be2a3874310e5627bafbe`。先核对了当前 AGENTS、git status、指定的三份输入及相邻 ledger、工具注册、claim、测试和测试收据实现。三份输入的 SHA-256 均与用户提供值完全一致。没有全仓聊天/配置扫描，没有读取 provider prompt、私有思维链、原始响应、凭据或云/VM 工程。
@@ -67,3 +69,23 @@
 本轮未调用任何原先被拒绝的维护脚本，也没有改用包装/另一 shell 重做。未停止/替换 MCP、agentd、Desktop、隧道或任何云任务，没有删除 claim、自动强退任务或重放部署/迁移。只有所有相关任务停止后，主控通过正常、已有授权且未被阻断的维护机制，才能处理安装与实际 host schema 验证。此次交付止于源码与独立候选。
 
 交付时调用现有 `work_task finish`，服务返回 `WORK_STATE: Managed claims/waiters remain; inspect and reconcile them before closing work.` 因此本次 ledger run 仍是 running/pending，不能报告为已成功关闭。此前 validation record 已持久化；测试/候选验收通过与 ledger 关闭拒绝分别记录。本轮不清理这些 claim、不替换进程、不轮询等待关闭，也不把拒绝改成测试失败。
+
+## 主控按真实父会话取得的轨迹元数据
+
+`scripts/inspect-conversation-trajectory.ts` 以工具实际返回的父run为锚点，从只读账本取得其origin，再按相同entryPoint/conversationHash精确选择；没有用整个项目或账号替代。2026-09-07 07:51:24Z快照覆盖32个匹配run、568个记录操作、25个managed执行，明确不包含未记录成operation的工具发现或observe，也不自动并入没有父关联的worker子conversation。因此这是本会话可归属账本子集，不是全部UI交互的完整轨迹。
+
+| 可核对数据 | 数量与解释 |
+|---|---|
+| 直接文件读取 |142次，7次标记failed；不能把全部读取认定为浪费|
+| workspace_context |149次，9次标记failed，说明主控上下文往返非常细碎|
+| 受管命令 |180次，35次标记failed；失败可能是构建、负例、外部状态或工具问题，不能直接称35个DevSpace bug|
+| apply_patch |89次，5次标记failed；上下文过期和原文不匹配均需保留真实原因|
+| 最长两条已结束命令 |1,668,524ms与737,879ms，约27分49秒和12分18秒；只表示记录生命周期，不等于模型计算时间|
+| 本次快照的执行终态 |12completed、10failed、2cancelled、1running；accepted/已部署不能从这里推导|
+| 历史用量完整性 |13条不完整或尚运行；已知独立delta合计30,266,742tokens只是可归属部分，不是精确会话总额或账单，亦不是本轮新增消耗|
+
+快照 `releases/trajectory-audit-20260907/parent-conversation-metadata.json`，SHA256 `59b53ab69ec626ebeb309b9db39cb79a462991cfee4ec150fa42cb6127a022c7`。各操作duration可能重叠，不能求和当总等待时间；脚本不读取prompt、模型正文、私有思维、凭据或业务数据，零推理。
+
+本轮还暴露了**父子任务归属断裂**：worker内部重新begin了另一个conversation，并试图在自己仍持有写claim时finish，既无法代表父任务用量，又被正确的在途保护拒绝。应由主控持有唯一父run、worker回报自身execution结果，不为记账再次创建互不关联的顶层run。自动传播已验证父run/执行身份是下一项需要实现的工具能力；本轮仅完成精确锚点检查与纠错，没有伪称已实现安全的跨进程继承。
+
+worker停止后，主控尝试按其返回的子run通过当前工作区原生结项，工具返回 `WORK_STATE: Work run is outside this workspace scope`。未更换工作区或改账本绕过；该子run的归属修复未执行，父run仍按自身scope正常结项。该事实再次说明不能将子工具会话的局部run自动当作主控父run。

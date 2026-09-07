@@ -48,6 +48,8 @@ import { createProjectConsoleRouter } from "./project-console-router.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
+import { ServerDiagnostics, diagnosticError } from "./server-diagnostics.js";
+import { traceMcpRequest } from "./mcp-request-diagnostics.js";
 import { formatPathForPrompt } from "./skills.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
@@ -787,6 +789,7 @@ function withTrackedToolHandlers(
 }
 
 export interface CreateServerOptions {
+  diagnostics?: Pick<ServerDiagnostics, "record">;
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
   registerProject?: typeof ensureDesktopProject;
 }
@@ -923,6 +926,9 @@ export function createServer(
 
   app.all("/mcp", async (req, res) => {
     const requestId = res.locals.requestId as string | undefined;
+    if (config.logging.requests) traceMcpRequest(req, res, requestId ?? randomUUID(),
+      (event, fields, level = "info") => options.diagnostics
+        ? options.diagnostics.record(event, fields, level) : logEvent(config.logging, level, event, fields));
 
     await new Promise<void>((resolve, reject) => {
       bearerAuth(req, res, (error?: unknown) => {
@@ -996,7 +1002,9 @@ async function isMainModule(): Promise<boolean> {
 }
 
 if (await isMainModule()) {
-  const { app, config, close, localAgentProviders } = createServer();
+  const config = loadConfig();
+  const diagnostics = new ServerDiagnostics(config);
+  const { app, close, localAgentProviders } = diagnostics.start(() => createServer(config, { diagnostics }));
   const httpServer = app.listen(config.port, config.host, () => {
     console.log(
       `devspace listening on http://${config.host}:${config.port}/mcp`,
@@ -1016,15 +1024,18 @@ if (await isMainModule()) {
     console.log(`subagent providers: ${formatLocalAgentProviderStatusSummary(localAgentProviders)}`);
   });
 
+  diagnostics.attach(httpServer);
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await shutdownHttpServer(httpServer, close);
+    await shutdownHttpServer(httpServer, close, (event) => diagnostics.record(event));
     process.exit(0);
   };
-  const handleShutdown = () => {
+  const handleShutdown = (signal: string) => {
+    diagnostics.record("server_signal_received", { signal, shuttingDown });
     void shutdown().catch((error) => {
+      diagnostics.record("server_shutdown_failed", diagnosticError(error), "error");
       console.error("devspace shutdown failed", error);
       process.exit(1);
     });

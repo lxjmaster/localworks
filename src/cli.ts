@@ -52,6 +52,7 @@ import {
 import { expandHomePath } from "./roots.js";
 import { readReviewRef } from "./review-checkpoints.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
+import { ServerDiagnostics, diagnosticError } from "./server-diagnostics.js";
 
 type Command =
   | "serve"
@@ -307,9 +308,13 @@ async function serve(): Promise<void> {
     );
   }
 
-  const { createServer } = await import("./server.js");
   const config = loadConfig();
-  const { app, close, localAgentProviders } = createServer(config);
+  const diagnostics = new ServerDiagnostics(config);
+  const { createServer } = await import("./server.js").catch((error) => {
+    diagnostics.record("server_startup_failed", { stage: "module_import", ...diagnosticError(error) }, "error");
+    throw error;
+  });
+  const { app, close, localAgentProviders } = diagnostics.start(() => createServer(config, { diagnostics }));
   const httpServer = app.listen(config.port, config.host, () => {
     console.log(`devspace listening on http://${config.host}:${config.port}/mcp`);
     console.log(`public base url: ${config.publicBaseUrl}`);
@@ -323,15 +328,18 @@ async function serve(): Promise<void> {
     console.log(`subagent providers: ${formatLocalAgentProviderStatusSummary(localAgentProviders)}`);
   });
 
+  diagnostics.attach(httpServer);
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await shutdownHttpServer(httpServer, close);
+    await shutdownHttpServer(httpServer, close, (event) => diagnostics.record(event));
     process.exit(0);
   };
-  const handleShutdown = () => {
+  const handleShutdown = (signal: string) => {
+    diagnostics.record("server_signal_received", { signal, shuttingDown });
     void shutdown().catch((error) => {
+      diagnostics.record("server_shutdown_failed", diagnosticError(error), "error");
       console.error("devspace shutdown failed", error);
       process.exit(1);
     });
