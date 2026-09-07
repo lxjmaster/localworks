@@ -5,6 +5,7 @@ import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { createInterface } from "node:readline";
+import { readDesktopCatalog } from "./codex-desktop-catalog.js";
 import * as z from "zod/v4";
 import { assertAllowedPath, canonicalPathIdentity, expandHomePath, isPathInsideRoot } from "./roots.js";
 
@@ -34,6 +35,8 @@ export interface ProjectReceipt {
   roots: string[];
   createdDirectories: string[];
   projectId?: string;
+  clientProjectId?: string;
+  clientRegistration?: "verified" | "missing_or_unverified";
   reused?: boolean;
   provider?: { home: string; command: string; homeMatched: boolean };
   before?: { projectId: string | null; threads: { id: string; cwd: string; projectId: string | null }[] };
@@ -126,6 +129,7 @@ const threadEvidence = ({ id, cwd, projectId }: Thread) => ({ id, cwd, projectId
 /** Server owns transactions and idempotency. Never write its database or global state directly. */
 export async function registerProject(client: ProjectControl, input: {
   roots: string[]; expectedHome: string; threadIds?: string[];
+  desktopCatalog?: { clientProjectId: string; projectId: string; threadIds: string[] };
 }): Promise<ProjectReceipt> {
   const receipt: ProjectReceipt = { protocol: PROJECT_PROTOCOL, status: "partial", roots: input.roots,
     createdDirectories: [], uiStatus: "unverified",
@@ -141,12 +145,17 @@ export async function registerProject(client: ProjectControl, input: {
       // A workspace can be one root in an existing multi-root project. Never replace the other roots.
       if (keys.every((key) => saved.includes(key))) matches.push(project);
     }
-    if (matches.length > 1) throw new Error("Multiple saved projects match these roots. Resolve the ambiguous Desktop project before retrying.");
-    let project = matches[0];
+    const selected = input.desktopCatalog ? matches.filter(p => p.id === input.desktopCatalog!.projectId) : matches;
+    if (selected.length > 1) throw new Error("Multiple saved projects match these roots. Resolve the ambiguous Desktop project before retrying.");
+    if (input.desktopCatalog && selected.length !== 1) throw new Error("Desktop client mapping does not match the app-server saved roots.");
+    let project = selected[0];
     const threads = await Promise.all([...new Set(input.threadIds ?? [])].map((id) => readThread(client, id)));
     for (const thread of threads) {
       if (!keys.includes(await pathKey(thread.cwd))) throw new Error("Thread cwd differs from the requested roots; refusing reassignment.");
-      if (thread.projectId !== null && thread.projectId !== project?.id) throw new Error("Thread already belongs to another project; refusing reassignment.");
+      if (thread.projectId !== null && thread.projectId !== project?.id &&
+        !(input.desktopCatalog?.threadIds.includes(thread.id) && matches.some(p => p.id === thread.projectId))) {
+        throw new Error("Thread already belongs to another project; refusing reassignment.");
+      }
     }
     receipt.before = { projectId: project?.id ?? null, threads: threads.map(threadEvidence) };
     receipt.reused = Boolean(project);
@@ -174,6 +183,10 @@ export async function registerProject(client: ProjectControl, input: {
       receipt.after.threads.push(threadEvidence(after));
     }
     receipt.status = "persisted_registration";
+    if (input.desktopCatalog) {
+      receipt.clientProjectId = input.desktopCatalog.clientProjectId;
+      receipt.clientRegistration = "verified";
+    }
     return receipt;
   } catch (error) {
     receipt.code = error instanceof z.ZodError ? "DESKTOP_SCHEMA_UNSUPPORTED" : "DESKTOP_REGISTRATION_PARTIAL";
@@ -240,10 +253,16 @@ export async function ensureDesktopProject(roots: string[], threadIds: string[] 
   if (!hasDesktop(env)) return { protocol: PROJECT_PROTOCOL, status: "not_applicable", roots, createdDirectories: [], uiStatus: "unverified" };
   let client: ProjectControl | undefined;
   try {
+    const desktopCatalog = await readDesktopCatalog(roots, desktopHome(env), projectPathKey);
     client = await connectDesktopProjects(env);
-    return await registerProject(client, { roots, threadIds, expectedHome: desktopHome(env) });
+    const receipt = await registerProject(client, { roots, threadIds, expectedHome: desktopHome(env), desktopCatalog });
+    const after = await readDesktopCatalog(roots, desktopHome(env), projectPathKey);
+    if (after.projectId !== desktopCatalog.projectId || after.clientProjectId !== desktopCatalog.clientProjectId) {
+      return { ...receipt, status: "partial", clientRegistration: "missing_or_unverified", action: "Desktop project changed concurrently; re-observe before starting a model." };
+    }
+    return receipt;
   } catch (error) {
     return { protocol: PROJECT_PROTOCOL, status: "partial", roots, createdDirectories: [], uiStatus: "unverified",
-      code: "DESKTOP_CONTROL_UNAVAILABLE", action: error instanceof Error ? error.message : "Inspect Desktop control connection." };
+      clientRegistration: "missing_or_unverified", code: "DESKTOP_CONTROL_UNAVAILABLE", action: error instanceof z.ZodError ? "Unsupported Desktop saved-project schema; update the adapter." : error instanceof Error ? error.message : "Inspect Desktop control connection." };
   } finally { await client?.close(); }
 }

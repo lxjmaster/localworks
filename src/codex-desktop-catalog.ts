@@ -1,0 +1,33 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import * as z from "zod/v4";
+
+// Read-only compatibility view of Desktop 26.901.6511.0. Desktop owns all writes.
+const savedProject = z.object({ id: z.string(), name: z.string(), rootPaths: z.array(z.string()).min(1),
+  createdAt: z.number(), updatedAt: z.number() }).passthrough();
+const catalog = z.object({
+  "local-projects": z.record(z.string(), savedProject),
+  "app-server-project-id-by-legacy-project-id-by-host": z.record(z.string(), z.record(z.string(), z.string())).optional(),
+  "thread-project-assignments": z.record(z.string(), z.unknown()).optional(),
+}).passthrough();
+
+export function inspectDesktopCatalog(value: unknown, roots: string[], home: string, key: (path: string) => string) {
+  const state = catalog.parse(value);
+  const matches = Object.values(state["local-projects"]).filter(p => roots.every(root => p.rootPaths.some(saved => key(root) === key(saved))));
+  if (matches.length !== 1) throw new Error(matches.length ? "Ambiguous Desktop saved project roots." :
+    "Desktop client has not saved this project. App-server registration alone is insufficient; complete the Desktop client registration before starting a model.");
+  const project = matches[0]!;
+  if (state["local-projects"][project.id]?.id !== project.id) throw new Error("Desktop project key mismatch.");
+  const hosts = Object.entries(state["app-server-project-id-by-legacy-project-id-by-host"] ?? {})
+    .filter(([host]) => host.startsWith("local:") && key(host.slice(6)) === key(home));
+  if (hosts.length !== 1 || !hosts[0]![1][project.id]) throw new Error("Desktop project mapping is missing or ambiguous; client migration must complete first.");
+  const threadIds = Object.entries(state["thread-project-assignments"] ?? {}).flatMap(([id, raw]) => {
+    const assignment = z.object({ projectKind: z.literal("local"), projectId: z.string() }).passthrough().safeParse(raw);
+    return assignment.success && assignment.data.projectId === project.id ? [id] : [];
+  });
+  return { clientProjectId: project.id, projectId: hosts[0]![1][project.id]!, threadIds };
+}
+
+export async function readDesktopCatalog(roots: string[], home: string, key: (path: string) => string) {
+  return inspectDesktopCatalog(JSON.parse(await readFile(join(home, ".codex-global-state.json"), "utf8")), roots, home, key);
+}

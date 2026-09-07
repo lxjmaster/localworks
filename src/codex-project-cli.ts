@@ -7,8 +7,9 @@ import { loadConfig } from "./config.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 import { WorkLedger } from "./work-ledger.js";
+import { readDesktopCatalog } from "./codex-desktop-catalog.js";
 import { CodexAppServerRuntime, codexCommandEnvironment, resolveCodexCommand } from "./local-agent-codex.js";
-import { connectDesktopProjects, desktopHome, prepareProjectRoots, registerProject, type ProjectControl } from "./codex-projects.js";
+import { connectDesktopProjects, desktopHome, prepareProjectRoots, projectPathKey, registerProject, type ProjectControl } from "./codex-projects.js";
 
 // Standalone source entry: pnpm exec tsx src/codex-project-cli.ts --root <path> ...
 // No existing server/daemon/Desktop restart, and no model invocation.
@@ -41,6 +42,7 @@ try {
       throw new Error("Ledger provider instance does not match the current provider. No thread metadata changed.");
     }
   }
+  const desktopCatalog = await readDesktopCatalog(prepared.roots, desktopHome(), projectPathKey);
   client = await connectDesktopProjects();
   const historyFiles = new Map<string, string>();
   for (const threadId of threads) {
@@ -67,7 +69,7 @@ try {
   const workspace = await new WorkspaceRegistry(config, store).openWorkspace(prepared.roots[0]!, {
     conversationScopeId: "devspace-project-registration-cli",
   });
-  const receipt = await registerProject(client, { roots: prepared.roots, expectedHome: desktopHome(), threadIds: [...threads] });
+  const receipt = await registerProject(client, { roots: prepared.roots, expectedHome: desktopHome(), threadIds: [...threads], desktopCatalog });
   receipt.createdDirectories = prepared.createdDirectories;
   const after = { history: await history(), ledgerSha256: ledgerHash() };
   const output = { workspaceId: workspace.workspace.id, devspaceProjectId: ledger.project(prepared.roots[0]!).id,
