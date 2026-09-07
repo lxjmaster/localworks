@@ -21,6 +21,7 @@ const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
 rl.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({method:m.method,params:m.method==='turn/start'?undefined:m.params})+'\\n');
  if(m.method==='initialize')return send({id:m.id,result:{}});
  if(m.method==='account/read')return send({id:m.id,result:{account:{type:'chatgpt',email:'fixture@example.invalid'}}});
+ if(m.method==='account/rateLimits/read')return send({id:m.id,error:{code:-32601,message:'Optional metadata unavailable in this lifecycle fixture'}});
  if(m.method==='thread/start'||m.method==='thread/resume')return send({id:m.id,result:{thread:{id:'thread',turns}}});
  if(m.method==='thread/read')return send({id:m.id,result:{thread:{id:'thread',turns}}});
  if(m.method==='thread/name/set'||m.method==='thread/unsubscribe')return send({id:m.id,result:{}});
