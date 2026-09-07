@@ -127,6 +127,7 @@ test("trace mechanism replay: 120 cumulative usage updates do not change task/pr
     usage(n);
     const next = await observe({ knownRevision: first.revision });
     assert.equal(next.revision, first.revision); assert.equal(next.unchanged, true);
+    assert.equal(next.completionSnapshot.revision, first.completionSnapshot.revision);
     assert.equal(next.completionReceipt, undefined);
   }
   assert.equal(oldRevisions.size, 120);
@@ -151,6 +152,7 @@ test("trace mechanism replay: 120 cumulative usage updates do not change task/pr
   assert.equal(brief.acceptanceStatus, "pending"); assert.equal(brief.responseAvailable, true);
   assert.equal(brief.nextAction.includeResponse, true); assert.equal(brief.completionReceipt, undefined);
   assert(!JSON.stringify(brief).includes("synthetic-secret-terminal"));
+  assert.equal(brief.completionSnapshot.acceptanceStatus, "pending");
   // Drop the host connection and register a fresh MCP server/client against persisted state.
   await client.close(); await server.close(); server = makeServer();
   client = new Client({ name: "reconnected-fixture", version: "1" });
@@ -159,6 +161,7 @@ test("trace mechanism replay: 120 cumulative usage updates do not change task/pr
   for (let n = 0; n < 2; n++) {
     const recovered = await observe({ knownRevision: brief.revision, includeResponse: true });
     assert.equal(recovered.response, "synthetic-secret-terminal");
+    assert.deepEqual(recovered.completionSnapshot, brief.completionSnapshot);
     assert.equal(recovered.completionReceipt.codexUsage.totalTokens, trace.delta.totalTokens);
     assert.equal(recovered.completionReceipt.acceptanceStatus, "pending");
     assert.equal(recovered.nextAction.action, "review_result");

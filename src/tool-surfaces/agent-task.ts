@@ -6,6 +6,7 @@ import { agentControlState, presentAgentObservation, presentAgentReceipt, presen
 import { LocalAgentStore } from "../local-agent-store.js";
 import type { ToolRegistrationContext } from "./types.js";
 import { WorkLedger } from "../work-ledger.js";
+import { WorkRunViews } from "../work-run-views.js";
 import { hostOrigin, registeredClientLabel } from "./work-task.js";
 import { toAgentErrorPayload, type LocalAgentError } from "../local-agent-errors.js";
 
@@ -128,8 +129,9 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
           run = ledger.requireScope(execution.run_id, workspace.root, workspace.id);
         }
         const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+        const completionSnapshot = run ? new WorkRunViews(ledger).snapshot(run.id) : undefined;
         const taskRevision = hash([record.id, record.status, record.latestResponse, record.error, record.errorCode, record.errorRetryable,
-          execution?.id, execution?.status, run?.id, run?.status, run?.acceptance, run?.evidence, run?.summary]);
+          execution?.id, execution?.status, run?.id, run?.status, run?.acceptance, run?.evidence, run?.summary, completionSnapshot?.revision]);
         const progressRevision = hash([record.progress?.phase, record.progress?.toolCategory]);
         const revision = hash([taskRevision, progressRevision]);
         const running = record.status === "queued" || record.status === "running" || record.status === "starting";
@@ -141,6 +143,7 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
             unchanged: revision === input.knownRevision, responseAvailable: !running && record.latestResponse !== undefined,
             workRunId: run?.id, executionId: execution?.id, executionStatus: execution?.status,
             acceptanceStatus: run?.acceptance ?? "unknown", completionReceipt,
+            completionSnapshot,
             ...(input.includeResponse && !running ? { nextAction: { actor: "host", action: "review_result", workRunId: run?.id,
               guidance: "Review returned evidence, then explicitly finish acceptance or continue related work with a new requestKey. Do not infer acceptance from completion." } } : {}),
             admission: record.status === "queued" ? processSessions.executionCoordinator?.waitingState(workspace.root, record.id) : undefined });

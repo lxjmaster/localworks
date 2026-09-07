@@ -2,6 +2,7 @@ import * as z from "zod/v4";
 import { randomUUID } from "node:crypto";
 import { digest, WorkLedger, type WorkOrigin } from "../work-ledger.js";
 import type { ToolRegistrationContext } from "./types.js";
+import { deliverySchema, publishDelivery, WorkRunViews } from "../work-run-views.js";
 
 /** Registration-only targets deliberately have no transport/server instance.
  * Legacy direct callers may expose a client label; otherwise leave it unknown
@@ -29,15 +30,19 @@ const evidenceSchema = z.array(z.object({ label: z.string().max(200), reference:
 export function registerWorkTaskTool({ server, config, workspaces, processSessions }: ToolRegistrationContext): void {
   server.registerTool("work_task", {
     title: "Track work and return Codex token receipt",
-    description: "Begin a top-level work run BEFORE direct host reads, commands or delegation, even when no Codex is needed. Reuse its workRunId on work/agent tools. Record bounded verification evidence. Finish only after all child work stops and acceptance is explicit; the returned receipt is the same one shown in /console. Include its Codex token totals and completeness in your final answer. This tool never starts model inference. Model labels are display labels, not verified model identities.",
+    description: "Begin a top-level work run BEFORE direct host reads, commands or delegation. Prefer snapshot for small, repeatable delivery/status reads; it never reads the checkout or returns historical prose. Use history for revision-bound pages; get explicitly retains full legacy history and usage. Record bounded verification evidence; optional delivery verifies selected public file hashes under the ordinary read claim. Finish only after all child work stops and acceptance is explicit. This tool never starts model inference. Model labels are display labels, not verified model identities.",
     inputSchema: {
-      workspaceId: z.string(), action: z.enum(["begin", "record", "finish", "get", "list"]),
+      workspaceId: z.string(), action: z.enum(["begin", "record", "finish", "get", "list", "snapshot", "history"]),
       workRunId: z.string().optional(), workItemId: key.optional(), runKey: key.optional(),
       title: z.string().min(1).max(200).optional(), hostModelLabel: z.string().max(80).optional(),
       requestKey: key.optional(), kind: z.string().max(64).optional(), label: z.string().max(200).optional(),
       status: z.enum(["completed", "failed", "cancelled"]).optional(),
       acceptance: z.enum(["passed", "failed", "not_applicable"]).optional(),
       summary: z.string().max(4000).optional(), evidence: evidenceSchema.optional(),
+      delivery: deliverySchema.optional().describe("Explicit host verification checkpoint. sourceHash is SHA-256 of JSON.stringify(sources) in given order; files are checked only on publication, never on snapshot. No config/key files. Not deployment acceptance."),
+      knownRevision: z.string().optional(),
+      expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/).optional().describe("Compare publication with the consumer's expected source manifest, without reading the checkout."),
+      cursor: z.string().max(2000).optional(), limit: z.number().int().min(1).max(100).optional(),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (input, extra) => {
@@ -54,7 +59,18 @@ export function registerWorkTaskTool({ server, config, workspaces, processSessio
       if (input.action === "list") return reply(ledger.listRuns(ledger.project(workspace.root).id));
       if (!input.workRunId) throw new Error("workRunId is required.");
       const run = ledger.requireScope(input.workRunId, workspace.root, workspace.id);
+      const views = new WorkRunViews(ledger);
+      if (input.action === "snapshot") return reply(views.snapshot(run.id, input.knownRevision, input.expectedSourceHash));
+      if (input.action === "history") return reply(views.history(run.id, input.cursor, input.limit));
       if (input.action === "record") {
+        if (input.delivery) {
+          if (!input.requestKey) throw new Error("Delivery record requires requestKey.");
+          if (input.kind || input.label || input.evidence || input.status) throw new Error("Delivery uses typed fields only; omit legacy record fields.");
+          const operationId = await processSessions.readWorkspace(workspace.root, async () =>
+            publishDelivery(ledger, run.id, workspace.root, input.requestKey!, input.delivery!));
+          return reply({ operationId, snapshot: views.snapshot(run.id) });
+        }
+        if (input.kind === "delivery.v1") throw new Error("Reserved delivery kind requires typed delivery publication.");
         if (!input.requestKey || !input.label) throw new Error("record requires requestKey and label.");
         const operationId = ledger.operation({ runId: run.id, requestKey: input.requestKey, kind: input.kind ?? "verification",
           label: input.label, status: input.status ?? "completed", evidence: input.evidence });
