@@ -1,0 +1,288 @@
+{
+  "schema": "devspace.trajectory-audit",
+  "version": 1,
+  "createdAt": "2026-09-07T07:48:48.047Z",
+  "sourceCommit": "de6d40ede1cb0a0a55709c14da8347eff8b267e4",
+  "baseCommit": "7a4b4a2ebf77a9ccc32be2a3874310e5627bafbe",
+  "sourceSha256": "967966ae70afda13db274f861c4fea96e0f4b6291936d0f23e75ea254efbe174",
+  "sourceScope": "Actual dirty checkout matched final test fingerprint after code commit; HEAD alone excludes pre-existing unrelated dirty changes",
+  "implemented": [
+    "stable compact run snapshot/default agent observation",
+    "revision-bound bounded history with legacy full get",
+    "typed hash-validated host delivery publication and read-only published recovery"
+  ],
+  "notImplemented": [
+    "active writer authenticated publication",
+    "application-specific handoff schema",
+    "runtime capabilities fingerprint",
+    "shell/background-service API"
+  ],
+  "metadata": {
+    "schema": "devspace.trajectory-metadata",
+    "version": 1,
+    "collectedAt": "2026-09-07T07:39:45.971Z",
+    "scope": {
+      "entryPoint": "chatgpt_mcp",
+      "conversationHash": "274828b6ba1b732e3ead5237",
+      "selection": "exact persisted origin match; no project-wide/account-wide attribution"
+    },
+    "runs": [
+      {
+        "id": "run_301f69671df142799eb9c18ee2d20a29",
+        "status": "running",
+        "acceptance": "pending",
+        "created_at": "2026-09-07T07:31:06.558Z",
+        "finished_at": null
+      }
+    ],
+    "operations": [],
+    "executions": [],
+    "operationTypes": {},
+    "historicalHotspotEvidence": "unavailable: current conversation has no historical operations",
+    "exitCodes": {
+      "status": "unavailable",
+      "reason": "console_operations schema has no exit-code field; status is not an exit code"
+    },
+    "usage": {
+      "status": "not_used",
+      "managedExecutionCount": 0,
+      "hostModelTokens": "unavailable; these tools do not meter the ChatGPT host",
+      "otherConversationsIncluded": false
+    },
+    "rawPromptsRead": false,
+    "rawResponsesRead": false,
+    "privateReasoningRead": false,
+    "credentialsRead": false,
+    "source": "read-only SQLite SELECT whitelist; no migrations, no agent/provider calls"
+  },
+  "metadataSha256": "32d7fc2dd27ffe2e06de807d07be94f83f7358da66ff3a13532d5770663ba5b7",
+  "workRunClosure": {
+    "status": "running",
+    "acceptanceStatus": "pending",
+    "finishAccepted": false,
+    "errorCode": "WORK_STATE",
+    "reason": "Managed claims/waiters remain; inspect and reconcile them before closing work.",
+    "validationRecordId": "op_9b59bbb97eab43e980b56f782d27d9dc",
+    "automaticallyRetried": false,
+    "claimsCleared": false
+  },
+  "sourceFiles": [
+    {
+      "path": "src/work-run-views.ts",
+      "sha256": "aa3d558891dc1df87ea7f1760fba99e84d7b6280b32fa5a62fdfce87b4b54e51"
+    },
+    {
+      "path": "src/work-run-views.test.ts",
+      "sha256": "44fc35d39ff83c379d7bfdd61aaa628455ab28f777e5b7741d01e69e22041f4d"
+    },
+    {
+      "path": "src/tool-surfaces/work-task.ts",
+      "sha256": "636bc3e7b02924ac4c3cad0e9f25e98ff9e560b9fff42944830822954175f542"
+    },
+    {
+      "path": "src/tool-surfaces/agent-task.ts",
+      "sha256": "53767a95912128bf27d3c23e8ece525b032b3c0bb6cb1a47fb8d3827b30ea26c"
+    },
+    {
+      "path": "src/agent-task-tool.test.ts",
+      "sha256": "53e3736c1460550bb013589a9d5c91ac8d54656e8b681bd172049288b5b628f0"
+    }
+  ],
+  "priorDirtyFiles": [
+    {
+      "path": "docs/gotchas.md",
+      "sha256AtDelivery": "62afb8a7e8ca3f380b020f14120a00f0a427e7bc32dad5fbf0fac3c1d0fcf590",
+      "editedByAudit": false,
+      "committedByAudit": false
+    },
+    {
+      "path": "src/cli.ts",
+      "sha256AtDelivery": "a1fe567007ba90a1680ada74ccce5fcabf1853ab2eb04f80f5e0632c7c489115",
+      "editedByAudit": false,
+      "committedByAudit": false
+    },
+    {
+      "path": "src/server-shutdown.test.ts",
+      "sha256AtDelivery": "3f42829b115cf135c82ee039caf96cafaed439b9ee24bfdebbae5d90b61d76ee",
+      "editedByAudit": false,
+      "committedByAudit": false
+    },
+    {
+      "path": "src/server-shutdown.ts",
+      "sha256AtDelivery": "76eb4cf23eff2ee67d5d2ef902bced83d82e4d2052596a0294e1c939e8f74673",
+      "editedByAudit": false,
+      "committedByAudit": false
+    },
+    {
+      "path": "src/server.ts",
+      "sha256AtDelivery": "35b29b93b2d590ac08ed8d9ce8a2f981a039e7188087365c88d4043e384f10cd",
+      "editedByAudit": false,
+      "committedByAudit": false
+    },
+    {
+      "path": "docs/server-diagnostics.md",
+      "sha256AtDelivery": "22f186c8f2823d9237217758f5e395a0db00008b332487b53cea7041c23bbb24",
+      "editedByAudit": false,
+      "committedByAudit": false
+    },
+    {
+      "path": "src/agentd-preflight.ts",
+      "sha256AtDelivery": "dbd7c2302af5c76299f9687101b83ead9099f57d5dea800c6c384f03d5e79996",
+      "editedByAudit": false,
+      "committedByAudit": false
+    },
+    {
+      "path": "src/inspect-agent-failure.ts",
+      "sha256AtDelivery": "be4e7053e4ddb9d9f6a94e41199cfc4a826467597941902ec1fb7d0bfcba6512",
+      "editedByAudit": false,
+      "committedByAudit": false
+    },
+    {
+      "path": "src/server-diagnostics.test.ts",
+      "sha256AtDelivery": "bf040bd2e6ae72a9d339c722d08c438d6199f16a336a5c48e100060a80c9dead",
+      "editedByAudit": false,
+      "committedByAudit": false
+    },
+    {
+      "path": "src/server-diagnostics.ts",
+      "sha256AtDelivery": "6d8a956f3ae52d65087b9dbf4e08dc8744114e68001534bb2483394557ce241b",
+      "editedByAudit": false,
+      "committedByAudit": false
+    }
+  ],
+  "tests": [
+    {
+      "path": "releases/test-receipts/2026-09-07T07-36-57-919Z-43be923c-dfc3-43ce-9c5f-6a65fe1655f2.json",
+      "sha256": "f653f5bbf3e81a3cc5e716d473d3a38b3d44b5a8e14a3bc27b9769b923766d25",
+      "id": "2026-09-07T07-36-57-919Z-43be923c-dfc3-43ce-9c5f-6a65fe1655f2",
+      "sourceCommit": "7a4b4a2ebf77a9ccc32be2a3874310e5627bafbe",
+      "sourceSha256": "7f9f92d63bed5c4e5b05874b497d81c5d67846ed513c60c25dcd688de2b38ce0",
+      "afterSourceSha256": "7f9f92d63bed5c4e5b05874b497d81c5d67846ed513c60c25dcd688de2b38ce0",
+      "status": "failed",
+      "exitCode": 1,
+      "counts": {
+        "tests": 18,
+        "suites": 0,
+        "pass": 16,
+        "fail": 2,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 12099.8498
+      },
+      "started": "2026-09-07T07:36:57.921Z",
+      "finished": "2026-09-07T07:37:10.198Z",
+      "selectedTestFiles": 4,
+      "rawLogSha256": "921493ec20a0b0df65d70f27ac726a157b5b2399e96c2ebe5348ccac4e5ce1dd",
+      "sourceUnchanged": true,
+      "footerComplete": true,
+      "rawLogsShared": false
+    },
+    {
+      "path": "releases/test-receipts/2026-09-07T07-38-32-606Z-c37632d1-81c6-4abf-8a9a-c6fe22d73232.json",
+      "sha256": "12911137244c98340c73a536abcdeb50cd3cf2b41d6b98acb75686b18b330bb5",
+      "id": "2026-09-07T07-38-32-606Z-c37632d1-81c6-4abf-8a9a-c6fe22d73232",
+      "sourceCommit": "7a4b4a2ebf77a9ccc32be2a3874310e5627bafbe",
+      "sourceSha256": "ddce056e5f8b635ee067deb6ee3196fb46dc238140a543d3830a21132eac4b8c",
+      "afterSourceSha256": "ddce056e5f8b635ee067deb6ee3196fb46dc238140a543d3830a21132eac4b8c",
+      "status": "passed",
+      "exitCode": 0,
+      "counts": {
+        "tests": 18,
+        "suites": 0,
+        "pass": 18,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 9721.8348
+      },
+      "started": "2026-09-07T07:38:32.608Z",
+      "finished": "2026-09-07T07:38:42.495Z",
+      "selectedTestFiles": 4,
+      "rawLogSha256": "bfcba63ac12e11aec3f7fed2da96c4ad72366eb98baf96500618c440195b5e49",
+      "sourceUnchanged": true,
+      "footerComplete": true,
+      "rawLogsShared": false
+    },
+    {
+      "path": "releases/test-receipts/2026-09-07T07-40-20-650Z-17b931ee-a383-49d0-8431-3f20a7af7b5e.json",
+      "sha256": "15fedd3ca0648250eaec7413522f76c1ac525af8fe1b5964701db95769cf4852",
+      "id": "2026-09-07T07-40-20-650Z-17b931ee-a383-49d0-8431-3f20a7af7b5e",
+      "sourceCommit": "7a4b4a2ebf77a9ccc32be2a3874310e5627bafbe",
+      "sourceSha256": "967966ae70afda13db274f861c4fea96e0f4b6291936d0f23e75ea254efbe174",
+      "afterSourceSha256": "967966ae70afda13db274f861c4fea96e0f4b6291936d0f23e75ea254efbe174",
+      "status": "passed",
+      "exitCode": 0,
+      "counts": {
+        "tests": 218,
+        "suites": 0,
+        "pass": 213,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 5,
+        "todo": 0,
+        "duration_ms": 166616.3944
+      },
+      "started": "2026-09-07T07:40:20.652Z",
+      "finished": "2026-09-07T07:43:07.460Z",
+      "selectedTestFiles": 76,
+      "rawLogSha256": "5543e1c911ba19ef02aa1e9c028f40b24ec88e45b21174664b3249894fd99fae",
+      "sourceUnchanged": true,
+      "footerComplete": true,
+      "rawLogsShared": false
+    }
+  ],
+  "typecheck": {
+    "command": "pnpm typecheck",
+    "exitCode": 0,
+    "sourceSha256": "967966ae70afda13db274f861c4fea96e0f4b6291936d0f23e75ea254efbe174"
+  },
+  "build": {
+    "directory": "releases/trajectory-audit-20260907/candidate",
+    "files": 410,
+    "treeSha256": "1cd69e7f4ddb46c38cf1a82f01ff90cf743a66679e31cbc0861e45e456fa759e",
+    "manifestSha256": "31c5dfa7caa58ff33ed307a44a578d77f4c25e5708db27bf889f0bf6aff48454",
+    "viteExitCode": 0,
+    "tscExitCode": 0,
+    "warning": "existing UI chunks exceed Vite 500 kB advisory"
+  },
+  "candidateVerification": {
+    "schema": "devspace.candidate-verification",
+    "version": 1,
+    "status": "passed",
+    "checkedAt": "2026-09-07T07:42:17.660Z",
+    "compiledModulesImported": true,
+    "actualInMemoryMcp": true,
+    "hostSchemaSha256": "322e154f24d5fac75d6b2fd33d9ab1006bbdc874fba01ab2ce6cd8fe6a6cc384",
+    "snapshotBytes": 640,
+    "sameRevisionRecovery": true,
+    "emptyHistoryVerified": true,
+    "liveServicesStartedOrReplaced": false,
+    "providerInvoked": false,
+    "realDeploymentAcceptance": "not_run"
+  },
+  "report": {
+    "path": "docs/trajectory-audit-20260907.md",
+    "sha256": "9c7cc0760ac13e599a4bada5566331c10c5fe377820b0bfce23a81e9d22200da"
+  },
+  "deployment": {
+    "performed": false,
+    "liveRuntimeVersion": "unverified",
+    "currentHostWorkTaskActions": [
+      "begin",
+      "record",
+      "finish",
+      "get",
+      "list"
+    ],
+    "servicesRestarted": false,
+    "activeDistReplaced": false,
+    "refusedMaintenanceReplayed": false,
+    "automaticDeployReplay": false,
+    "workersStarted": 0,
+    "claimsStolen": 0,
+    "cloudProjectAccessed": false,
+    "pushed": false
+  }
+}
