@@ -97,3 +97,13 @@ node scripts/verify-execution-reliability.mjs releases/execution-reliability-202
 另外修复 daemon 子进程继承父进程 Node `-e/-p/--input-type/--check/--test` 入口参数的问题，保留 loader/runtime 参数，防止嵌入式诊断重复执行父入口。此改动不修改已活跃进程，也不为诊断启动付费模型。
 
 主控在上述最终源码上重新执行定向套件及 typecheck：**66 项，63 通过、0 失败、3 个既有平台跳过**，28,627.6527 ms。合成 120 次 usage 更新仍产生 0 次任务/进度 revision 变化；本次 longpoll 实测 127 ms、2 次内部读取。源码 `tsc --noEmit` 和 `git diff --check` 通过。此结果不覆盖或抹去前文全量套件的三个已复现基线失败；最终服务启用状态需另行记录。
+
+## 已启用：最终构建与原生 MCP 回验
+
+2026-09-07 已提交 `cbd4bafaa6f98039e520d34619cb50ed25799721`。主控从该提交用 Git archive 导出独立 runtime staging，没有把主工作区既有 dirty 文件打进发布包。TypeScript、Vite UI 及编译后 MCP 冒烟通过，提供端调用数为 0；产物位于 `releases/execution-reliability-cbd4baf-runtime/`。
+
+第一次维护因 daemon 已自行停止而未被旧就绪条件接受，原服务未受影响。随后检查到 daemon PID 文件、ownership lock 和旧进程均不存在，并再次核对执行 claims、waiters 及 active agent 数均为 0，才开始切换。2026-09-07 **02:01:49 UTC / 10:01:49 UTC+8**，原监听进程 3248 已替换为 35620；保持 `127.0.0.1:7676`、现有配置、OAuth 状态、根目录权限和隧道不变。原 dist 和一致 SQLite 备份保留于 `releases/activation-cbd4baf-20260907-020132/`，安装文件与已验证 staging 哈希一致，healthz 通过，无回滚发生。没有终止活跃任务、清除锁或执行新的模型请求。
+
+重连后实际通过原生 MCP（不是只运行 CLI）的三个回验：旧终态 observation 返回 `taskRevision`、`progressRevision`、`nextAction`，以相同 revision 显式请求仍能取回完成回执；广告过的 `~/.codex/skills/android-cli/SKILL.md` 通过 `read` 成功读取；缺少必要字段的 start 返回准确 `missingFields` 且 `requestAccepted=false / providerInvoked=false`。历史错误和缺失活动时间没有被改写或伪造；新错误分类对未来返回与受测保存格式生效。
+
+因此本文早期“未替换服务”描述的是验证阶段，不再代表最终状态。最终状态为：修复已提交、干净构建已验证、服务已启用且完成原生 MCP 回验。仍不宣称此次合成基准就是真实长任务的耗时或 token 节省比例，也不把三个已知基线测试失败归为通过。
