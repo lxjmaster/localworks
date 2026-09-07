@@ -28,3 +28,6 @@ releases/
 /playwright-report/
 /test-results/
 /publication-private/
+
+# Isolated verification output; never replace the running dist during tests.
+/.local/voice-memory-trace-candidate/

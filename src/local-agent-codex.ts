@@ -13,6 +13,7 @@ import {
 import { removeDevspaceNodeModulesBinFromPath } from "./local-agent-path.js";
 import { parseCodexUsage } from "./agent-usage.js";
 import { summarizeCodexFailure } from "./codex-failure-summary.js";
+import { quotaPreflight } from "./codex-quota-preflight.js";
 import { codexActivity, type AgentActivity } from "./agent-progress.js";
 import { ensureDesktopProject, type ProjectReceipt } from "./codex-projects.js";
 import { terminateProcessTree } from "./process-platform.js";
@@ -86,9 +87,9 @@ export interface CodexAppServerRuntimeOptions {
   registerProject?: (roots: string[], threadIds: string[], env: NodeJS.ProcessEnv) => Promise<ProjectReceipt>;
 }
 
-export type CodexControlMethod = "account/read" | "thread/read" | "thread/list" | "thread/loaded/list" |
+export type CodexControlMethod = "account/read" | "account/rateLimits/read" | "thread/read" | "thread/list" | "thread/loaded/list" |
   "thread/name/set" | "thread/archive" | "thread/unarchive";
-const CONTROL_METHODS: ReadonlySet<string> = new Set(["account/read", "thread/read", "thread/list", "thread/loaded/list",
+const CONTROL_METHODS: ReadonlySet<string> = new Set(["account/read", "account/rateLimits/read", "thread/read", "thread/list", "thread/loaded/list",
   "thread/name/set", "thread/archive", "thread/unarchive"]);
 
 export function codexInstanceIdentity(command: string, env: NodeJS.ProcessEnv, accountResult: unknown) {
@@ -162,6 +163,20 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
             operation: "run",
             retryable: true,
             message: "Codex app-server is not running.",
+          });
+        }
+        let quota: ReturnType<typeof quotaPreflight> | undefined;
+        try {
+          quota = quotaPreflight(await this.rpc.request("account/rateLimits/read", {}));
+        } catch {
+          // Older/API-key providers may not expose ChatGPT quota metadata.
+          // Missing metadata is not zero quota and does not invent a restriction.
+        }
+        if (quota?.blockedByProvider) {
+          throw new AgentProviderUnavailableError({
+            code: "PROVIDER_UNAVAILABLE", provider: "codex", operation: "quota_preflight", retryable: false,
+            message: JSON.stringify({ category: "usage_or_rate_limit", ...quota,
+              nextAction: "check_provider_limits_before_resuming_original_thread" }),
           });
         }
         let threadConfig: Record<string, unknown> = {};
