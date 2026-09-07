@@ -106,17 +106,18 @@ export class WorkspaceRegistry {
     input: string | OpenWorkspaceInput,
     openOptions: OpenWorkspaceOptions = {},
   ): Promise<WorkspaceContext> {
-    let workspaceInput = typeof input === "string" ? { path: input } : input;
-    await prepareProjectRoots([workspaceInput.path], this.config.allowedRoots, workspaceInput.createDirectory ?? false);
-    workspaceInput = { ...workspaceInput, path: assertAllowedPath(normalizeProjectPath(workspaceInput.path), this.config.allowedRoots) };
+    const requested = typeof input === "string" ? { path: input } : input;
+    const workspaceInput = { ...requested, path: assertAllowedPath(normalizeProjectPath(requested.path), this.config.allowedRoots) };
     const conversationScopeId = openOptions.conversationScopeId;
     if (!conversationScopeId || !this.store) {
+      await prepareProjectRoots([workspaceInput.path], this.config.allowedRoots, workspaceInput.createDirectory ?? false);
       return this.openNewWorkspace(workspaceInput);
     }
 
     const projectKey = await this.conversationProjectKey(workspaceInput);
     const mode = workspaceInput.mode ?? "checkout";
     if (mode === "worktree") {
+      await prepareProjectRoots([workspaceInput.path], this.config.allowedRoots, workspaceInput.createDirectory ?? false);
       const context = await this.openWorktreeWorkspace(workspaceInput.path, workspaceInput.baseRef);
       return {
         ...context,
@@ -137,7 +138,7 @@ export class WorkspaceRegistry {
       };
     }
 
-    const open = this.openConversationCheckout(
+    const open = this.prepareConversationCheckout(
       workspaceInput,
       conversationScopeId,
       targetKey,
@@ -163,14 +164,40 @@ export class WorkspaceRegistry {
     return this.openCheckoutWorkspace(options.path);
   }
 
-  private async openConversationCheckout(
+  private async prepareConversationCheckout(
     input: OpenWorkspaceInput,
     conversationScopeId: string,
     targetKey: string,
   ): Promise<WorkspaceContext> {
+    // Preparation belongs to the same deduplicated open operation as reuse.
+    // Otherwise recreating a deleted path can make a stale cached workspace
+    // appear valid before its previous identity is checked.
+    const previous = this.store?.getConversationBinding(conversationScopeId, targetKey);
+    let missing = false;
+    try {
+      await stat(input.path);
+    } catch (error) {
+      if (isErrnoException(error) && error.code === "ENOENT") missing = true;
+      else throw error;
+    }
+    await prepareProjectRoots([input.path], this.config.allowedRoots, input.createDirectory ?? false);
+    return this.openConversationCheckout(
+      input, conversationScopeId, targetKey, missing ? previous?.workspaceSessionId : undefined,
+    );
+  }
+
+  private async openConversationCheckout(
+    input: OpenWorkspaceInput,
+    conversationScopeId: string,
+    targetKey: string,
+    replacedSessionId?: string,
+  ): Promise<WorkspaceContext> {
     const binding = this.store?.getConversationBinding(conversationScopeId, targetKey);
     if (binding) {
-      const reusableWorkspace = await this.findReusableCheckoutWorkspace(binding);
+      // Invalidate only the observed old binding, never another opener's newly
+      // created binding, and retain the old session and its historical ledger.
+      const reusableWorkspace = binding.workspaceSessionId === replacedSessionId
+        ? undefined : await this.findReusableCheckoutWorkspace(binding);
 
       if (reusableWorkspace) {
         const context = await this.reusedWorkspaceContext(reusableWorkspace);

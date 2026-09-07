@@ -190,12 +190,16 @@ test("a context-loading failure preserves a valid checkout binding", async (t) =
   assert.equal(recovered.workspace.id, first.workspace.id);
 });
 
-test("a deleted checkout is replaced with a new workspace", async (t) => {
+test("a deleted checkout needs explicit recreation and receives a new workspace", async (t) => {
   const { project, registry } = await fixture(t);
   const first = await registry.openWorkspace(project, { conversationScopeId: "chat-1" });
 
   await rm(project, { recursive: true, force: true });
-  const replacement = await registry.openWorkspace(project, { conversationScopeId: "chat-1" });
+  await assert.rejects(
+    () => registry.openWorkspace(project, { conversationScopeId: "chat-1" }),
+    /createDirectory=true/,
+  );
+  const replacement = await registry.openWorkspace({ path: project, createDirectory: true }, { conversationScopeId: "chat-1" });
 
   assert.notEqual(replacement.workspace.id, first.workspace.id);
   assert.equal((await stat(project)).isDirectory(), true);
@@ -205,11 +209,25 @@ test("canonical checkout identity remains stable when the requested target start
   const { project, registry } = await fixture(t);
   const missingTarget = join(project, "generated", "checkout");
 
-  const first = await registry.openWorkspace(missingTarget, { conversationScopeId: "chat-1" });
+  const first = await registry.openWorkspace({ path: missingTarget, createDirectory: true }, { conversationScopeId: "chat-1" });
   const second = await registry.openWorkspace(missingTarget, { conversationScopeId: "chat-1" });
 
   assert.equal(first.workspace.root, missingTarget);
   assert.equal(second.workspace.id, first.workspace.id);
+});
+
+test("concurrent explicit recreation shares one new workspace without reviving the old binding", async (t) => {
+  const { project, registry } = await fixture(t);
+  const old = await registry.openWorkspace(project, { conversationScopeId: "chat-1" });
+  await rm(project, { recursive: true, force: true });
+  const [first, second] = await Promise.all([
+    registry.openWorkspace({ path: project, createDirectory: true }, { conversationScopeId: "chat-1" }),
+    registry.openWorkspace({ path: project, createDirectory: true }, { conversationScopeId: "chat-1" }),
+  ]);
+  assert.notEqual(first.workspace.id, old.workspace.id);
+  assert.equal(first.workspace.id, second.workspace.id);
+  const repeated = await registry.openWorkspace({ path: project, createDirectory: true }, { conversationScopeId: "chat-1" });
+  assert.equal(repeated.workspace.id, first.workspace.id);
 });
 
 test("canonical checkout identity survives equivalent path and symlink aliases", async (t) => {
@@ -316,13 +334,13 @@ test("an inactive persisted checkout binding is not reused", async (t) => {
 test("a checkout replaced by a file reports the filesystem error", async (t) => {
   const context = await fixture(t);
   const target = join(context.root, "file-target");
-  await context.registry.openWorkspace(target, { conversationScopeId: "chat-1" });
+  await context.registry.openWorkspace({ path: target, createDirectory: true }, { conversationScopeId: "chat-1" });
   await rm(target, { recursive: true, force: true });
   await writeFile(target, "not a directory\n");
 
   await assert.rejects(
     () => context.registry.openWorkspace(target, { conversationScopeId: "chat-1" }),
-    /Workspace root must be a directory/,
+    /Project root\/parent must be a directory/,
   );
 });
 
