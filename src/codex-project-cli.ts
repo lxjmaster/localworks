@@ -7,7 +7,7 @@ import { loadConfig } from "./config.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 import { WorkLedger } from "./work-ledger.js";
-import { readDesktopCatalog } from "./codex-desktop-catalog.js";
+import { ensureSavedDesktopProject } from "./codex-desktop-open.js";
 import { CodexAppServerRuntime, codexCommandEnvironment, resolveCodexCommand } from "./local-agent-codex.js";
 import { connectDesktopProjects, desktopHome, prepareProjectRoots, projectPathKey, registerProject, type ProjectControl } from "./codex-projects.js";
 
@@ -42,8 +42,10 @@ try {
       throw new Error("Ledger provider instance does not match the current provider. No thread metadata changed.");
     }
   }
-  const desktopCatalog = await readDesktopCatalog(prepared.roots, desktopHome(), projectPathKey);
   client = await connectDesktopProjects();
+  if (projectPathKey(client.home) !== projectPathKey(desktopHome())) throw new Error("Desktop provider home mismatch; no client workspace was opened.");
+  const savedClient = await ensureSavedDesktopProject(prepared.roots, desktopHome(), projectPathKey);
+  const desktopCatalog = savedClient.catalog;
   const historyFiles = new Map<string, string>();
   for (const threadId of threads) {
     const response = await client.request("thread/read", { threadId, includeTurns: false }) as { thread: { id: string; path: string } };
@@ -71,6 +73,7 @@ try {
   });
   const receipt = await registerProject(client, { roots: prepared.roots, expectedHome: desktopHome(), threadIds: [...threads], desktopCatalog });
   receipt.createdDirectories = prepared.createdDirectories;
+  receipt.clientCreation = savedClient.creation;
   const after = { history: await history(), ledgerSha256: ledgerHash() };
   const output = { workspaceId: workspace.workspace.id, devspaceProjectId: ledger.project(prepared.roots[0]!).id,
     ...receipt, providerInstanceIds: [...new Set(managed.map((entry) => entry.instance_id))],

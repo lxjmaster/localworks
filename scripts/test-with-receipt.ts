@@ -39,6 +39,8 @@ const before = fingerprint();
 const directory = join(root, "releases", "test-receipts");
 mkdirSync(directory, { recursive: true, mode: 0o700 });
 const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`;
+const testCodexHome = join(directory, `${id}-codex-home`);
+mkdirSync(testCodexHome, { recursive: false, mode: 0o700 });
 const logPath = join(directory, `${id}.log`), receiptPath = join(directory, `${id}.json`);
 const fd = openSync(logPath, "wx", 0o600);
 const parser = new TestReceiptSummary();
@@ -46,7 +48,10 @@ let savedBytes = 0, truncated = false, timedOut = false, interrupted = false;
 const started = new Date().toISOString();
 const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", windowsHide: true, timeout: 5_000 }).stdout?.trim();
 const child = spawn(process.execPath, ["--import", "tsx", "--test", "--test-concurrency=1", "--test-timeout=120000", "--test-reporter=tap", ...tests], {
-  cwd: root, env: { ...process.env, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32",
+  // Unit/integration fixtures must not discover the operator's real Desktop
+  // catalog or authenticated Codex home when exercising automatic creation.
+  // Real Desktop acceptance uses the separate explicit verification command.
+  cwd: root, env: { ...process.env, NO_COLOR: "1", CODEX_HOME: testCodexHome }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32",
 });
 const save = (chunk: Buffer) => {
   const remaining = Math.max(0, 16 * 1024 * 1024 - savedBytes);
@@ -75,7 +80,7 @@ child.once("close", (exitCode, signal) => {
   try { after = fingerprint(); } catch { /* Deleted sources fail verification. */ }
   const receipt = { id, started, finished: new Date().toISOString(), sourceCommit: /^[a-f0-9]{40,64}$/.test(head ?? "") ? head : null,
     sourceSha256: before, afterSourceSha256: after, selectedTestFiles: tests.length,
-    runner: { engine: "node:test", loader: "tsx", concurrency: 1, reporter: "tap", perTestTimeoutMs: 120_000, processTimeoutMs: 600_000 },
+    runner: { engine: "node:test", loader: "tsx", concurrency: 1, reporter: "tap", perTestTimeoutMs: 120_000, processTimeoutMs: 600_000, isolatedCodexHome: true },
     ...parser.result(exitCode, before === after), startupFailed, timedOut, interrupted, signal,
     rawLogPath: logPath, rawLogTruncated: truncated, rawLogSha256: createHash("sha256").update(readFileSync(logPath)).digest("hex"), receiptPath };
   writeFileSync(receiptPath, JSON.stringify(receipt, null, 2), { flag: "wx", mode: 0o600 });

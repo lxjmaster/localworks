@@ -11,16 +11,24 @@ const catalog = z.object({
   "thread-project-assignments": z.record(z.string(), z.unknown()).optional(),
 }).passthrough();
 
+export class DesktopProjectMissingError extends Error {
+  constructor() { super("Desktop client has not saved this project. App-server registration alone is insufficient; complete the Desktop client registration before starting a model."); }
+}
+export class DesktopMappingPendingError extends Error {
+  constructor() { super("Desktop project mapping is missing or ambiguous; client migration must complete first."); }
+}
+
 export function inspectDesktopCatalog(value: unknown, roots: string[], home: string, key: (path: string) => string) {
   const state = catalog.parse(value);
   const matches = Object.values(state["local-projects"]).filter(p => roots.every(root => p.rootPaths.some(saved => key(root) === key(saved))));
-  if (matches.length !== 1) throw new Error(matches.length ? "Ambiguous Desktop saved project roots." :
-    "Desktop client has not saved this project. App-server registration alone is insufficient; complete the Desktop client registration before starting a model.");
+  if (matches.length > 1) throw new Error("Ambiguous Desktop saved project roots.");
+  if (matches.length === 0) throw new DesktopProjectMissingError();
   const project = matches[0]!;
   if (state["local-projects"][project.id]?.id !== project.id) throw new Error("Desktop project key mismatch.");
   const hosts = Object.entries(state["app-server-project-id-by-legacy-project-id-by-host"] ?? {})
     .filter(([host]) => host.startsWith("local:") && key(host.slice(6)) === key(home));
-  if (hosts.length !== 1 || !hosts[0]![1][project.id]) throw new Error("Desktop project mapping is missing or ambiguous; client migration must complete first.");
+  if (hosts.length > 1) throw new Error("Ambiguous Desktop provider-home mapping.");
+  if (hosts.length !== 1 || !hosts[0]![1][project.id]) throw new DesktopMappingPendingError();
   const threadIds = Object.entries(state["thread-project-assignments"] ?? {}).flatMap(([id, raw]) => {
     const assignment = z.object({ projectKind: z.literal("local"), projectId: z.string() }).passthrough().safeParse(raw);
     return assignment.success && assignment.data.projectId === project.id ? [id] : [];

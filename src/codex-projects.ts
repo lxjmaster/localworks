@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { createInterface } from "node:readline";
 import { readDesktopCatalog } from "./codex-desktop-catalog.js";
+import { ensureSavedDesktopProject } from "./codex-desktop-open.js";
 import * as z from "zod/v4";
 import { assertAllowedPath, canonicalPathIdentity, expandHomePath, isPathInsideRoot } from "./roots.js";
 
@@ -22,7 +23,7 @@ const threadSchema = z.object({ id: z.string().min(1), cwd: z.string().min(1),
 }).passthrough();
 type Project = z.infer<typeof projectSchema>;
 type Thread = z.infer<typeof threadSchema>;
-export type ProjectMethod = "project/list" | "project/create" | "project/read" | "thread/read" | "thread/metadata/update";
+export type ProjectMethod = "project/list" | "project/create" | "project/read" | "thread/read" | "thread/metadata/update" | "thread/start" | "thread/name/set";
 export interface ProjectControl {
   home: string;
   command: string;
@@ -37,6 +38,7 @@ export interface ProjectReceipt {
   projectId?: string;
   clientProjectId?: string;
   clientRegistration?: "verified" | "missing_or_unverified";
+  clientCreation?: "existing" | "requested_and_verified";
   reused?: boolean;
   provider?: { home: string; command: string; homeMatched: boolean };
   before?: { projectId: string | null; threads: { id: string; cwd: string; projectId: string | null }[] };
@@ -211,7 +213,7 @@ export async function connectDesktopProjects(env: NodeJS.ProcessEnv = process.en
   });
   if (!command) throw new Error("No verified Desktop app-server 0.153.4 found. Configure DEVSPACE_CODEX_DESKTOP_COMMAND or update the adapter; no model was started.");
   const child = spawn(command, ["app-server"], { env, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  const pending = new Map<number, { method: string; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   let sequence = 0;
   const fail = () => { for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new Error("Desktop control connection closed; re-observe registration before retrying.")); } pending.clear(); };
   child.on("error", fail); child.on("exit", fail); child.stderr.resume();
@@ -222,14 +224,14 @@ export async function connectDesktopProjects(env: NodeJS.ProcessEnv = process.en
       const entry = pending.get(message.id);
       if (!entry) return;
       pending.delete(message.id); clearTimeout(entry.timer);
-      if (message.error) entry.reject(new Error(`Desktop RPC rejected request (code ${message.error.code}); verify protocol/version and re-observe metadata.`));
+      if (message.error) entry.reject(new Error(`Desktop RPC ${entry.method} rejected request (code ${Number.isSafeInteger(message.error.code) ? message.error.code : "unknown"}); verify protocol/version and re-observe metadata.`));
       else entry.resolve(message.result);
     } catch { fail(); }
   });
   const request = (method: string, params: unknown) => new Promise<unknown>((resolve, reject) => {
     const id = ++sequence;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error("Desktop RPC timeout; outcome unknown. Re-run the same idempotent registration to recover.")); }, 10_000);
-    pending.set(id, { resolve, reject, timer });
+    pending.set(id, { method, resolve, reject, timer });
     child.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (error) => { if (error) fail(); });
   });
   const close = async () => {
@@ -253,9 +255,11 @@ export async function ensureDesktopProject(roots: string[], threadIds: string[] 
   if (!hasDesktop(env)) return { protocol: PROJECT_PROTOCOL, status: "not_applicable", roots, createdDirectories: [], uiStatus: "unverified" };
   let client: ProjectControl | undefined;
   try {
-    const desktopCatalog = await readDesktopCatalog(roots, desktopHome(env), projectPathKey);
     client = await connectDesktopProjects(env);
-    const receipt = await registerProject(client, { roots, threadIds, expectedHome: desktopHome(env), desktopCatalog });
+    if (await pathKey(client.home) !== await pathKey(desktopHome(env))) throw new Error("Desktop provider home differs; no client workspace was opened.");
+    const saved = await ensureSavedDesktopProject(roots, desktopHome(env), projectPathKey, env);
+    const desktopCatalog = saved.catalog;
+    const receipt = { ...await registerProject(client, { roots, threadIds, expectedHome: desktopHome(env), desktopCatalog }), clientCreation: saved.creation };
     const after = await readDesktopCatalog(roots, desktopHome(env), projectPathKey);
     if (after.projectId !== desktopCatalog.projectId || after.clientProjectId !== desktopCatalog.clientProjectId) {
       return { ...receipt, status: "partial", clientRegistration: "missing_or_unverified", action: "Desktop project changed concurrently; re-observe before starting a model." };
