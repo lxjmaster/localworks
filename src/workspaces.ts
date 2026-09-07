@@ -14,6 +14,7 @@ import { createManagedWorktree } from "./git-worktrees.js";
 import {
   AccessDeniedError,
   assertAllowedPath,
+  expandHomePath,
   isPathInsideRoot,
   resolveAllowedPath,
 } from "./roots.js";
@@ -300,6 +301,8 @@ export class WorkspaceRegistry {
   }
 
   resolveReadPath(workspace: Workspace, inputPath: string): WorkspaceReadPath {
+    // Expand advertised home paths before workspace resolution can turn ~ into a literal directory.
+    inputPath = expandHomePath(inputPath);
     try {
       return {
         absolutePath: this.resolvePath(workspace, inputPath),

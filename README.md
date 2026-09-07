@@ -153,6 +153,16 @@ node bin/devspace.js serve
 
 主控用 `work_task` 建立工作，持续传递 `workRunId`；子操作结束、实际证据检查完毕后再结算。你不用每次手工挑一个新 Codex 窗口，更不必把每条构建日志来回复制。平台仍可能要求确认高风险工具动作；本项目不会绕过这些控制。
 
+### 执行观察、断线取回与排队
+
+`agent_task observe` 返回任务与进展 revision；主控携带上次的 `revision` 使用有界 longpoll（默认 20 秒，最大 25 秒）。累计 Token、更新时间和经过时长本身不触发提前返回。日常观察不附整份用量回执；用量查询仍走 `usage`，终态用 `includeResponse: true` 显式取回结果与完成回执。同一 revision 可反复取回，连接中断不会消费结果。
+
+`progress` 仅包含固定阶段/工具类别、最后活动时间、时长和等待原因；构建/测试类别是 provider 事件提示，静默不等于卡死，未知数据保留未知。默认不输出命令、stdout 或模型思维。`nextAction` 指示继续观察、检查 claim 或由主控审核结果；任务完成不会自动通过验收，主控仍须显式结算 `work_task`。
+
+队列和 busy continue 不启动额外推理、不抢写锁、不自动重放写入。收到冲突先按 `nextAction` 核对 owner/claim；相关续接在终态后使用新的 `requestKey`。广告中的 `~/…/SKILL.md` 与绝对路径可用于 `read` 和 `workspace_context capture`，仅允许已加载技能及其目录资源，并检查真实路径越界。外部技能 capture 作为阅读证据返回，不混入仅接受工作区源码的 delegation refs。
+
+这些改进需主控在现有发布任务停稳后安全启用新的 server 与 agentd；源码修改或 staging 构建成功不代表线上已更新。实测数据、缺失证据和运行路径见[执行可靠性 trace 复盘](docs/execution-reliability-trace.zh-CN.md)。
+
 ## 项目任务台与用量
 
 管理台默认地址是 `http://127.0.0.1:7676/console/`，使用 owner 口令建立独立浏览器会话。远程访问需要单独开启，不因 MCP 接通而自动开放。[任务台说明](docs/project-console.md)

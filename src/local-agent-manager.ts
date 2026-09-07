@@ -513,6 +513,10 @@ export class LocalAgentManager {
         agentDir: this.agentDir,
       };
       const callbacks: LocalAgentRunCallbacks = {
+        onActivity: (activity) => {
+          const saved = this.store.recordActivityResult(record.id, activity);
+          if (saved.isErr()) this.log("warn", "agent_progress_persistence_failed", { agentId: record.id, errorCode: saved.error.code });
+        },
         onThreadInfo: executionId ? (observation) => { this.ledger.attachThread(executionId, observation); } : undefined,
         onNameResult: executionId ? (success) => { this.ledger.nameResult(executionId, success); } : undefined,
         onRequest: executionId ? () => { this.ledger.requestStarted(executionId); } : undefined,

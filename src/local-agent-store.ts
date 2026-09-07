@@ -4,10 +4,12 @@ import { Result, type Result as BetterResult } from "better-result";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import { AgentConflictError, AgentStoreError, isProgrammerDefect } from "./local-agent-errors.js";
 import { recordAgentUsage, readAgentUsage, type AgentUsageObservation } from "./agent-usage.js";
+import { decodeAgentProgress, type AgentActivity, type AgentProgress } from "./agent-progress.js";
 
 export type LocalAgentStatus = "starting" | "queued" | "running" | "idle" | "error" | "stopped";
 
 export interface LocalAgentRecord {
+  progress?: AgentProgress;
   id: string;
   workspaceId?: string;
   workspaceRoot: string;
@@ -51,6 +53,7 @@ export interface LocalAgentListScope {
 }
 
 interface LocalAgentRow {
+  progress: string | null;
   id: string;
   workspace_id: string | null;
   workspace_root: string;
@@ -83,6 +86,21 @@ export class LocalAgentStore {
   }
 
   usage(agentId: string) { return readAgentUsage(this.database.sqlite, agentId); }
+
+  recordActivityResult(agentId: string, activity: AgentActivity): BetterResult<void, AgentStoreError> {
+    return storeResult("activity", () => {
+      const record = this.getById(agentId);
+      if (!record || record.status !== "running" || !record.progress) return;
+      const now = new Date().toISOString();
+      const next = decodeAgentProgress({ ...record.progress, phase: activity.phase,
+        toolCategory: activity.phase === "tool" ? activity.toolCategory : undefined, lastActivityAt: now });
+      if (!next) return;
+      // Coalesce identical activity to at most one persisted heartbeat per second.
+      if (next.phase === record.progress.phase && next.toolCategory === record.progress.toolCategory &&
+        Date.parse(now) - Date.parse(record.progress.lastActivityAt) < 1000) return;
+      this.database.sqlite.prepare("update local_agent_sessions set progress=? where id=?").run(JSON.stringify(next), agentId);
+    });
+  }
 
   list(scope: LocalAgentListScope = {}): LocalAgentRecord[] {
     let rows: LocalAgentRow[];
@@ -285,6 +303,15 @@ export class LocalAgentStore {
       ...patch,
       updatedAt: new Date().toISOString(),
     };
+    if (patch.status && (patch.status !== current.status || patch.status === "starting" || !current.progress)) {
+      const reset = patch.status === "starting" || !current.progress || ["idle", "error", "stopped"].includes(current.status);
+      const startedAt = reset ? updated.updatedAt : current.progress!.startedAt;
+      updated.progress = { startedAt, lastActivityAt: updated.updatedAt,
+        admittedAt: patch.status === "running" ? (reset ? updated.updatedAt : current.progress?.admittedAt ?? updated.updatedAt)
+          : reset ? undefined : current.progress?.admittedAt,
+        phase: patch.status === "queued" ? "queued" : patch.status === "starting" ? "preparing"
+          : patch.status === "running" ? "provider" : "finished" };
+    }
 
     this.database.sqlite
       .prepare(
@@ -304,7 +331,8 @@ export class LocalAgentStore {
           context_key = ?,
           context_signature = ?,
           work_item_id = ?,
-          updated_at = ?
+          updated_at = ?,
+          progress = ?
          where id = ?`,
       )
       .run(
@@ -324,6 +352,7 @@ export class LocalAgentStore {
         updated.contextSignature ?? null,
         updated.workItemId ?? null,
         updated.updatedAt,
+        updated.progress ? JSON.stringify(decodeAgentProgress(updated.progress)) : null,
         updated.id,
       );
 
@@ -367,6 +396,7 @@ export function createLocalAgentStore(stateDir: string): LocalAgentStore {
 
 function rowToLocalAgentRecord(row: LocalAgentRow): LocalAgentRecord {
   return {
+    progress: row.progress ? decodeAgentProgress(JSON.parse(row.progress)) : undefined,
     id: row.id,
     workspaceId: row.workspace_id ?? undefined,
     workspaceRoot: row.workspace_root,

@@ -152,6 +152,9 @@ export function migrateDatabase(sqlite: Database.Database): void {
 }
 
 migrations.push({ version: 11, name: "project-console-work-ledger", up: migrateProjectConsole });
+migrations.push({ version: 12, name: "bounded-agent-progress", up(sqlite) {
+  addColumnIfMissing(sqlite, "local_agent_sessions", "progress", "text");
+} });
 
 function migrateWorkspaceState(sqlite: Database.Database): void {
   sqlite.exec(`

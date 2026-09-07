@@ -9,6 +9,7 @@ import type {
 } from "./local-agent-manager.js";
 import type { LocalAgentWriteMode } from "./local-agent-runtime.js";
 import { validateContextShape } from "./workspace-context.js";
+import { decodeAgentProgress } from "./agent-progress.js";
 import { LOCAL_AGENT_DAEMON_PROTOCOL_VERSION } from "./local-agent-daemon-lifecycle.js";
 
 export type LocalAgentDaemonMethod =
@@ -201,6 +202,7 @@ export function decodeAgentRecord(value: unknown): LocalAgentRecord {
     contextKey: optionalString(record?.contextKey),
     contextSignature: optionalString(record?.contextSignature),
     workItemId: optionalString(record?.workItemId),
+    progress: decodeAgentProgress(record?.progress),
   };
 }
 

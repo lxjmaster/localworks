@@ -3,6 +3,7 @@ import type { AgentProviderError } from "./local-agent-errors.js";
 import type { LocalAgentProvider } from "./local-agent-profiles.js";
 import type { ProviderThreadObservation } from "./work-ledger.js";
 import type { AgentUsageObservation } from "./agent-usage.js";
+import type { AgentActivity } from "./agent-progress.js";
 
 export type LocalAgentWriteMode = "read_only" | "allowed" | "full_access";
 
@@ -36,6 +37,7 @@ export interface LocalAgentRunCallbacks {
   onTurnStarted?: (turnId: string) => void | Promise<void>;
   onProviderFinished?: () => void;
   onUsage?: (observation: AgentUsageObservation) => void;
+  onActivity?: (activity: AgentActivity) => void;
   /**
    * Called as soon as a provider creates or resolves a durable continuation
    * identity. The callback is awaited before the provider starts work that

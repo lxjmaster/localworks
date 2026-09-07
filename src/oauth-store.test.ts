@@ -53,6 +53,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 9, name: "provider-usage-snapshots" },
       { version: 10, name: "bounded-read-admission-and-context-affinity" },
       { version: 11, name: "project-console-work-ledger" },
+      { version: 12, name: "bounded-agent-progress" },
     ]);
   } finally {
     database.close();

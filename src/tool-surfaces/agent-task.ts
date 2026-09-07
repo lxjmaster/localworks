@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import * as z from "zod/v4";
 import { createLocalAgentClient, type LocalAgentClient } from "../local-agent-client.js";
-import { presentAgentObservation, presentAgentReceipt, presentAgentSummary } from "../local-agent-presentation.js";
+import { agentControlState, presentAgentObservation, presentAgentReceipt, presentAgentSummary } from "../local-agent-presentation.js";
 import { LocalAgentStore } from "../local-agent-store.js";
 import type { ToolRegistrationContext } from "./types.js";
 import { WorkLedger } from "../work-ledger.js";
 import { hostOrigin, registeredClientLabel } from "./work-task.js";
+import { toAgentErrorPayload, type LocalAgentError } from "../local-agent-errors.js";
 
 type AgentClient = Pick<LocalAgentClient, "start" | "continue" | "get" | "list"> & Partial<Pick<LocalAgentClient, "cancelQueued">>;
 
@@ -38,9 +39,9 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
       resources: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/)).max(16).optional(),
       model: z.string().optional(),
       effort: z.string().optional(),
-      waitMs: z.number().int().min(0).max(25_000).optional(),
-      knownRevision: z.string().optional(),
-      includeResponse: z.boolean().optional(),
+      waitMs: z.number().int().min(0).max(25_000).optional().describe("Bounded longpoll, default 20000 ms. Reuse revision; usage and elapsed time alone do not wake it."),
+      knownRevision: z.string().optional().describe("Task/progress change token, independent of cumulative usage. Observe never accepts or finishes a work run."),
+      includeResponse: z.boolean().optional().describe("Explicitly retrieve terminal response and completion receipt, repeatable after disconnect even with the same revision."),
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, async (input, extra) => {
@@ -49,6 +50,20 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
     const reply = (value: unknown, isError = false) => ({
       content: [{ type: "text" as const, text: JSON.stringify(value) }], isError,
     });
+    const failure = async (error: LocalAgentError) => {
+      if (error.code !== "AGENT_CONFLICT") return reply({ code: error.code, message: error.message, retryable: error.retryable }, true);
+      const payload = toAgentErrorPayload(error);
+      const owner = payload.agentId ? await agents.get(payload.agentId, scope) : undefined;
+      const owned = owner?.isOk() ? owner.value : undefined;
+      return reply({ code: payload.code, message: "Execution or session is occupied; reconcile before submitting further work.",
+        operation: payload.operation, retryable: payload.retryable, requestAccepted: false, providerInvoked: false,
+        owner: owned ? { scope: "workspace", workspaceId: workspace.id, agentId: owned.id, status: presentAgentReceipt(owned).status }
+          : { scope: "checkout_or_shared_limit", observableFromWorkspace: false },
+        waiting: owned && ["queued", "running", "starting"].includes(owned.status) ? "owner_active" : "reconciliation_required",
+        nextAction: owned ? { tool: "agent_task", action: "observe", workspaceId: workspace.id, agentId: owned.id, waitMs: 20_000 }
+          : { tool: "agent_task", action: "claims", workspaceId: workspace.id },
+        guidance: "Observe the owner first. Continue only related work after terminal; use a new requestKey for new instructions. Never steal an active claim or automatically replay writes." }, true);
+    };
     if (input.action === "claims") return reply({ claims: processSessions.executionCoordinator?.inspect(workspace.root) ?? [],
       coordinationEnabled: Boolean(processSessions.executionCoordinator) });
     if (input.action === "list") {
@@ -77,7 +92,10 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
       context: input.context, resources: input.resources, requestKey: input.requestKey, workRunId: input.workRunId };
     if (input.action === "start" || input.action === "continue") {
       if (!input.prompt || (input.action === "start" ? (!input.target || !input.taskKey || !input.workItemId) : (!input.agentId || !input.requestKey || !input.workRunId))) {
-        return reply({ code: "INVALID_TASK", message: "start needs target, taskKey, workItemId and prompt; continue needs agentId, requestKey, workRunId and prompt." }, true);
+        const required = input.action === "start" ? ["target", "taskKey", "workItemId", "prompt"] as const : ["agentId", "requestKey", "workRunId", "prompt"] as const;
+        return reply({ code: "INVALID_TASK", action: input.action, missingFields: required.filter((field) => !input[field]),
+          requestAccepted: false, providerInvoked: false, nextAction: { action: "correct_input" },
+          message: "Supply the missing fields before submitting this task." }, true);
       }
       const ledger = new WorkLedger(config.stateDir);
       try {
@@ -91,8 +109,8 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
         ? await agents.start({ ...scope, ...overrides, target: input.target!, prompt: input.prompt, taskKey: input.taskKey,
             workItemId: input.workItemId, contextKey: input.contextKey, freshContext: input.freshContext })
         : await agents.continue(input.agentId!, input.prompt, overrides, scope);
-      if (result.isErr()) return reply({ code: result.error.code, message: result.error.message, retryable: result.error.retryable }, true);
-      return reply({ ...presentAgentReceipt(result.value), workRunId: overrides.workRunId, contextKey: result.value.contextKey, workItemId: result.value.workItemId,
+      if (result.isErr()) return failure(result.error);
+      return reply({ ...presentAgentReceipt(result.value), ...agentControlState(result.value, workspace.id), workRunId: overrides.workRunId, contextKey: result.value.contextKey, workItemId: result.value.workItemId,
         contextMode: result.value.providerSessionId ? "resume" : "new", hostContextProvided: Boolean(input.context) });
     }
     if (!input.agentId) return reply({ code: "INVALID_TASK", message: "observe needs agentId." }, true);
@@ -102,22 +120,32 @@ export function registerAgentTaskTool(context: ToolRegistrationContext, client?:
       if (found.isErr()) return reply({ code: found.error.code, message: found.error.message }, true);
       const record = found.value;
       const ledger = new WorkLedger(config.stateDir);
-      let completionReceipt: ReturnType<WorkLedger["receipt"]> | null = null;
+      let execution: ReturnType<WorkLedger["latestExecution"]>;
+      let run: ReturnType<WorkLedger["run"]> | undefined;
       try {
-        const execution = ledger.latestExecution(record.id);
+        execution = ledger.latestExecution(record.id);
         if (execution) {
-          ledger.requireScope(execution.run_id, workspace.root, workspace.id);
-          completionReceipt = ledger.receipt(execution.run_id);
+          run = ledger.requireScope(execution.run_id, workspace.root, workspace.id);
+        }
+        const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+        const taskRevision = hash([record.id, record.status, record.latestResponse, record.error, record.errorCode, record.errorRetryable,
+          execution?.id, execution?.status, run?.id, run?.status, run?.acceptance, run?.evidence, run?.summary]);
+        const progressRevision = hash([record.progress?.phase, record.progress?.toolCategory]);
+        const revision = hash([taskRevision, progressRevision]);
+        const running = record.status === "queued" || record.status === "running" || record.status === "starting";
+        if (!running || Date.now() >= deadline || (input.knownRevision && revision !== input.knownRevision)) {
+          const observation = presentAgentObservation(input.includeResponse && !running ? record : { ...record, latestResponse: undefined,
+            error: record.errorCode ? "Agent reported an error; explicitly retrieve the terminal result for details." : undefined });
+          const completionReceipt = input.includeResponse && !running && run ? ledger.receipt(run.id) : undefined;
+          return reply({ ...observation, ...agentControlState(record, workspace.id, revision), revision, taskRevision, progressRevision,
+            unchanged: revision === input.knownRevision, responseAvailable: !running && record.latestResponse !== undefined,
+            workRunId: run?.id, executionId: execution?.id, executionStatus: execution?.status,
+            acceptanceStatus: run?.acceptance ?? "unknown", completionReceipt,
+            ...(input.includeResponse && !running ? { nextAction: { actor: "host", action: "review_result", workRunId: run?.id,
+              guidance: "Review returned evidence, then explicitly finish acceptance or continue related work with a new requestKey. Do not infer acceptance from completion." } } : {}),
+            admission: record.status === "queued" ? processSessions.executionCoordinator?.waitingState(workspace.root, record.id) : undefined });
         }
       } finally { ledger.close(); }
-      const revision = createHash("sha256").update(JSON.stringify([record.updatedAt, record.status, record.latestResponse, record.error, completionReceipt])).digest("hex");
-      const running = record.status === "queued" || record.status === "running" || record.status === "starting";
-      if (!running || Date.now() >= deadline || (input.knownRevision && revision !== input.knownRevision)) {
-        if (revision === input.knownRevision && !input.includeResponse) return reply({ id: record.id, status: presentAgentReceipt(record).status, revision, unchanged: true });
-        const observation = presentAgentObservation(input.includeResponse ? record : { ...record, latestResponse: undefined });
-        return reply({ ...observation, revision, responseAvailable: Boolean(record.latestResponse),
-          completionReceipt, codexUsageStatus: completionReceipt?.usageStatus ?? "unavailable" });
-      }
       await delay(Math.min(500, Math.max(0, deadline - Date.now())), undefined, { signal: extra.signal });
     }
   });

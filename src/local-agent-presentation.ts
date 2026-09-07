@@ -72,6 +72,30 @@ export function presentAgentReceipt(record: LocalAgentRecord): AgentReceiptOutpu
   return { id: record.id, status: presentAgentStatus(record.status) };
 }
 
+/** Safe, bounded control metadata. Clock values deliberately do not belong in revisions. */
+export function agentControlState(record: LocalAgentRecord, workspaceId: string, revision?: string) {
+  const running = ["starting", "queued", "running"].includes(record.status);
+  const p = record.progress;
+  const end = running ? Date.now() : Date.parse(record.updatedAt);
+  const elapsed = (start?: string) => start ? Math.max(0, end - Date.parse(start)) : null;
+  return {
+    providerThreadId: record.providerSessionId && /^[a-fA-F0-9-]{36}$/.test(record.providerSessionId)
+      ? record.providerSessionId : undefined,
+    progress: { phase: running ? p?.phase ?? (record.status === "queued" ? "queued" : "unknown") : "finished",
+      toolCategory: running ? p?.toolCategory : undefined,
+      lastActivityAt: p?.lastActivityAt ?? null, elapsedMs: elapsed(p?.startedAt), runtimeMs: elapsed(p?.admittedAt),
+      queueMs: p ? Math.max(0, (p.admittedAt ? Date.parse(p.admittedAt) : end) - Date.parse(p.startedAt)) : null,
+      activityAgeMs: p ? Math.max(0, end - Date.parse(p.lastActivityAt)) : null,
+      waitingReason: record.status === "queued" ? "execution_admission" : running && p?.phase !== "tool" ? "provider_or_uninstrumented" : null,
+      ownerScope: { workspaceId, agentId: record.id },
+      detail: "Activity is an event hint, not proof of success. Silence does not imply a stalled process." },
+    nextAction: running ? { tool: "agent_task", action: "observe", workspaceId, agentId: record.id, waitMs: 20_000, knownRevision: revision }
+      : record.errorCode === "AGENT_CONFLICT" ? { tool: "agent_task", action: "claims", workspaceId }
+      : { tool: "agent_task", action: "observe", workspaceId, agentId: record.id, waitMs: 0, includeResponse: true, knownRevision: revision },
+    ...(running ? {} : { terminal: true, resultRecovery: "Repeat observe with includeResponse=true after disconnect. Inspect the result and explicitly record work_task finish acceptance; completion never implies acceptance." }),
+  };
+}
+
 export function presentAgentSummary(record: LocalAgentRecord): AgentSummaryOutput {
   return { ...presentAgentReceipt(record), target: record.profileName };
 }

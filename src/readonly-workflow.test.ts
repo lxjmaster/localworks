@@ -12,6 +12,12 @@ import type { LocalAgentDriver, LocalAgentRunInput, LocalAgentRunCallbacks } fro
 import { ProcessSessionManager } from "./process-sessions.js";
 import { ExecutionCoordinator, ExecutionConflictError } from "./execution-coordinator.js";
 import { readContextFile, verifyHostContext, validateContextShape } from "./workspace-context.js";
+import { registerAgentTaskTool } from "./tool-surfaces/agent-task.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { ToolRegistrationContext } from "./tool-surfaces/types.js";
+import { WorkLedger } from "./work-ledger.js";
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 400 && !check(); i++) await delay(5);
@@ -112,6 +118,45 @@ test("queued cancellation and timeout never invoke a provider and release waiter
   assert.equal(f.calls.length, 1); await f.finish(a.id);
   const observer = new ExecutionCoordinator(f.stateDir);
   assert.equal(observer.inspect(f.project).length, 0); observer.close();
+});
+
+test("MCP queue conflict and busy continue expose scoped next actions with zero provider calls", async (t) => {
+  const f = fixture(t, { queueWaitMs: 150 });
+  const external = new ExecutionCoordinator(f.stateDir);
+  const claim = external.acquire({ workspaceRoot: f.project, kind: "mutation" });
+  const server = new McpServer({ name: "fixture", version: "1" });
+  registerAgentTaskTool({ server, config: { stateDir: f.stateDir, subagents: {} }, processSessions: f.host,
+    workspaces: { getWorkspace: (id: string) => ({ id, root: f.project }) },
+  } as unknown as ToolRegistrationContext, {
+    start: (input) => f.manager.start(input), continue: (...args) => f.manager.continue(...args),
+    get: async (...args) => f.manager.get(...args), list: async (...args) => f.manager.list(...args),
+  });
+  const client = new Client({ name: "fixture", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a); await client.connect(b);
+  const call = async (args: Record<string, unknown>) => {
+    const result = await client.callTool({ name: "agent_task", arguments: { workspaceId: f.scope.workspaceId, ...args } });
+    return { ...JSON.parse((result.content as Array<{ text: string }>)[0]!.text), isError: result.isError };
+  };
+  try {
+  const started = await call({ action: "start", target: "codex", prompt: "fixture", taskKey: "fixture", workItemId: "fixture" });
+  assert.equal(started.status, "queued"); assert.equal(started.nextAction.action, "observe");
+  const queued = await call({ action: "observe", agentId: started.id, waitMs: 0 });
+  assert.equal(queued.progress.waitingReason, "execution_admission");
+  assert.equal(queued.admission.owners[0].claimId, claim.id); assert.equal(queued.admission.owners[0].scope, "checkout");
+  const busy = await call({ action: "continue", agentId: started.id, prompt: "next", requestKey: "next", workRunId: started.workRunId });
+  assert.equal(busy.isError, true); assert.equal(busy.providerInvoked, false); assert.equal(busy.requestAccepted, false);
+  assert.equal(busy.nextAction.action, "observe"); assert.equal(busy.owner.workspaceId, f.scope.workspaceId);
+  for (const action of ["observe", "usage"])
+    assert.equal((await call({ action, agentId: started.id, workspaceId: "other-workspace", waitMs: 0, includeResponse: true })).isError, true);
+  await until(() => f.store.getById(started.id)!.status === "error");
+  const terminal = await call({ action: "observe", agentId: started.id, waitMs: 0 });
+  assert.equal(terminal.nextAction.action, "claims"); assert.equal(terminal.error.code, "AGENT_CONFLICT");
+  assert.equal(f.calls.length, 0);
+  const ledger = new WorkLedger(f.stateDir);
+  try { const receipt = ledger.receipt(started.workRunId); assert.equal(receipt.usageStatus, "not_used"); assert.equal(receipt.codexUsage?.totalTokens, 0); }
+  finally { ledger.close(); }
+  assert.equal(external.inspect(f.project)[0]?.id, claim.id, "Waiting/observe never steal an active claim");
+  } finally { await client.close(); await server.close(); claim.release(); external.close(); }
 });
 
 test("context affinity resumes a relevant thread, while fresh review gets an independent one", async (t) => {

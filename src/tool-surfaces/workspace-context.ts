@@ -44,8 +44,11 @@ export function registerWorkspaceContextTool({ server, config, workspaces, proce
       let bytesRead = 0;
       let lineBudget = 500;
       const entries = input.files.map((selection) => {
-        workspaces.resolvePath(workspace, selection.path);
-        const file = readContextFile(workspace.root, selection.path);
+        const resolved = workspaces.resolveReadPath(workspace, selection.path);
+        const readRoot = resolved.skillRead?.skill.baseDir ?? workspace.root;
+        const file = readContextFile(readRoot, relative(readRoot, resolved.absolutePath));
+        // External skill refs are read evidence, not workspace source refs for delegation.
+        if (resolved.skillRead) file.path = resolved.absolutePath;
         bytesRead += file.bytes.length;
         if (bytesRead > 4 * 1024 * 1024) throw new Error("Context capture exceeds 4 MiB; narrow the selected files.");
         const lines = file.bytes.toString("utf8").split(/\r?\n/);
@@ -61,8 +64,8 @@ export function registerWorkspaceContextTool({ server, config, workspaces, proce
           lines: selected, truncated: selected.length < candidates.length,
           nextLine: selected.length < candidates.length ? (selected.at(-1)?.line ?? first - 1) + 1 : null };
       });
-      const refs = entries.map(({ path, sha256 }) => ({ path, sha256 }));
-      return { providerInvoked: false, contextId: createHash("sha256").update(JSON.stringify(refs)).digest("hex"),
+      const refs = entries.filter(({ path }) => !isAbsolute(path)).map(({ path, sha256 }) => ({ path, sha256 }));
+      return { providerInvoked: false, contextId: createHash("sha256").update(JSON.stringify(entries.map(({ path, sha256 }) => ({ path, sha256 })))).digest("hex"),
         refs, entries, bytesRead,
         consistency: "Selected file versions under a cooperative read claim. External edits require revalidation. This is not a whole-repository snapshot.",
         delegation: "Use the host to summarize relevant facts; pass summary and refs as agent_task.context only when a worker is actually needed." };

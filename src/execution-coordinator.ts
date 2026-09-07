@@ -196,6 +196,25 @@ export class ExecutionCoordinator {
         recovery: "Active claims require reconciliation after an interrupted owner; never replay or steal them by timeout." }));
   }
 
+  /** Read-only queue evidence. Do not expose another workspace's agent, path or resource names. */
+  waitingState(workspaceRoot: string, agentId: string) {
+    const root = canonicalExecutionRoot(workspaceRoot);
+    const ticket = this.database.sqlite.prepare("select * from execution_waiters where agent_id=? and checkout_root=? order by sequence limit 1")
+      .get(agentId, root) as WaiterRow | undefined;
+    if (!ticket) return undefined;
+    const active = this.database.sqlite.prepare("select * from execution_claims").all() as ClaimRow[];
+    const prior = this.database.sqlite.prepare("select * from execution_waiters where sequence < ? and expires_at_ms > ? order by sequence")
+      .all(ticket.sequence, Date.now()) as WaiterRow[];
+    const blockers = [...active, ...prior].filter((row) => exclusiveConflict(ticket, row));
+    return { state: ticket.expires_at_ms <= Date.now() ? "expired_pending_settlement" : "queued",
+      expiresAt: new Date(ticket.expires_at_ms).toISOString(),
+      reason: blockers.length ? "claim_or_prior_waiter" : "admission_limit_or_pending_dispatch",
+      owners: blockers.slice(0, 8).map((row) => ({ claimId: row.id, kind: row.kind, access: row.access_mode,
+        scope: overlaps(row.checkout_root, root) ? "checkout" : "shared_resource", state: "sequence" in row ? "queued" : "active" })),
+      ownersTruncated: blockers.length > 8,
+      guidance: "Wait for admission or cancel this owned queued task. Active claims are never stolen; writes are never replayed automatically." };
+  }
+
   close(): void {
     if (this.closed) return;
     // A waiting intent can safely disappear; an active child may still be running.

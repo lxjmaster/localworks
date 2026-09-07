@@ -12,6 +12,8 @@ import {
 } from "./local-agent-errors.js";
 import { removeDevspaceNodeModulesBinFromPath } from "./local-agent-path.js";
 import { parseCodexUsage } from "./agent-usage.js";
+import { summarizeCodexFailure } from "./codex-failure-summary.js";
+import { codexActivity, type AgentActivity } from "./agent-progress.js";
 import { ensureDesktopProject, type ProjectReceipt } from "./codex-projects.js";
 import { terminateProcessTree } from "./process-platform.js";
 import type {
@@ -239,17 +241,20 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
           // Telemetry failure must not cause paid work to be retried or crash the protocol loop.
           try { callbacks?.onUsage?.({ ...usage, newThread: !input.providerSessionId, providerVersion: this.options.version }); }
           catch { /* Missing telemetry remains unknown; it is never synthesized as zero. */ }
-        }, callbacks?.onTurnStarted);
+        }, callbacks?.onTurnStarted, (activity) => {
+          try { callbacks?.onActivity?.(activity); } catch { /* Progress cannot fail or replay paid work. */ }
+        });
         callbacks?.onProviderFinished?.();
         const parsed = parseCompletedTurn(completed.event.params, completed.items);
         if (parsed.failure) {
+          const failure = summarizeCodexFailure(completed.event.params);
           throw new AgentProviderExecutionError({
             code: "PROVIDER_EXECUTION_ERROR",
             provider: this.provider,
             operation: "run",
-            retryable: false,
+            retryable: failure.retryable,
             cause: completed.event.params,
-            message: "Codex agent turn failed.",
+            message: failure.message,
           });
         }
         if (!parsed.finalResponse.trim()) {
@@ -414,6 +419,8 @@ interface CodexTurnResult {
 }
 
 interface CodexTurnAccumulator {
+  onActivity?: (activity: AgentActivity) => void;
+  pendingActivity: Array<{ event: CodexEvent; activity: AgentActivity }>;
   threadId: string;
   turnId?: string;
   items: unknown[];
@@ -468,7 +475,7 @@ class CodexAppServerRpc {
   }
 
   async runTurn(threadId: string, params: unknown, onUsage?: (value: unknown) => void,
-    onTurnStarted?: (turnId: string) => void | Promise<void>): Promise<CodexTurnResult> {
+    onTurnStarted?: (turnId: string) => void | Promise<void>, onActivity?: (activity: AgentActivity) => void): Promise<CodexTurnResult> {
     if (this.fatalError) throw this.fatalError;
     if (this.turns.has(threadId)) throw new Error(`Codex thread ${threadId} already has an active turn.`);
     let resolveTurn!: (result: CodexTurnResult) => void;
@@ -481,7 +488,9 @@ class CodexAppServerRpc {
       threadId,
       items: [],
       pendingUsage: [],
+      pendingActivity: [],
       onUsage,
+      onActivity,
       resolve: resolveTurn,
       reject: rejectTurn,
     };
@@ -490,6 +499,10 @@ class CodexAppServerRpc {
       const response = await this.request("turn/start", params);
       turn.turnId = readString(asRecord(response)?.turn, "id");
       if (turn.turnId) await onTurnStarted?.(turn.turnId);
+      for (const pending of turn.pendingActivity) {
+        if (turn.turnId && turnMatchesEvent(turn, pending.event)) turn.onActivity?.(pending.activity);
+      }
+      turn.pendingActivity = [];
       for (const usage of turn.pendingUsage) {
         if (turn.turnId && asRecord(usage)?.turnId === turn.turnId) turn.onUsage?.(usage);
       }
@@ -558,6 +571,15 @@ class CodexAppServerRpc {
     const turn = this.findTurn(event);
     if (!turn) return;
     const params = asRecord(event.params);
+    const activity = codexActivity(event.method, event.params);
+    if (activity) {
+      if (!turn.turnId) {
+        turn.pendingActivity.push({ event: { method: event.method, params: {
+          threadId: params?.threadId, turnId: params?.turnId,
+        } }, activity });
+        if (turn.pendingActivity.length > 32) turn.pendingActivity.shift();
+      } else if (turnMatchesEvent(turn, event)) turn.onActivity?.(activity);
+    }
     if (event.method === "thread/tokenUsage/updated") {
       if (!turn.turnId) {
         turn.pendingUsage.push(event.params);

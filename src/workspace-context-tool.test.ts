@@ -20,7 +20,8 @@ test("host can capture, search and version exact source through MCP without any 
   const processSessions = new ProcessSessionManager({ stateDir: join(root, "state") });
   const server = new McpServer({ name: "fixture", version: "1" });
   registerWorkspaceContextTool({ server, processSessions,
-    workspaces: { getWorkspace: () => ({ id: "ws", root: project }), resolvePath: (_workspace: unknown, path: string) => resolve(project, path) },
+    workspaces: { getWorkspace: () => ({ id: "ws", root: project }), resolvePath: (_workspace: unknown, path: string) => resolve(project, path),
+      resolveReadPath: (_workspace: unknown, path: string) => ({ absolutePath: resolve(project, path), readRoots: [project] }) },
   } as unknown as ToolRegistrationContext);
   const client = new Client({ name: "host", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a); await client.connect(b);

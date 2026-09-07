@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { CodexAppServerRuntime } from "./local-agent-codex.js";
 import { LocalAgentStore } from "./local-agent-store.js";
 import type { AgentUsageObservation } from "./agent-usage.js";
+import type { AgentActivity } from "./agent-progress.js";
 
 test("real JSON-RPC transport captures early usage, rejects stale turns and retains failure usage on Windows too", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "devspace-fake-codex-"));
@@ -26,9 +27,14 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       tokenUsage:{total:{inputTokens:100*turn,outputTokens:20*turn,cachedInputTokens:40,reasoningOutputTokens:8,totalTokens:120*turn},
        last:{inputTokens:25,outputTokens:5,cachedInputTokens:0,reasoningOutputTokens:2,totalTokens:30}}}});
    notify('old-turn'); notify(id);
+   send({method:'item/started',params:{threadId:'thread-fixture',turnId:'old-turn',item:{type:'fileChange'}}});
+   send({method:'item/started',params:{threadId:'thread-fixture',turnId:id,
+     item:{type:'commandExecution',command:'pnpm build synthetic-secret',aggregatedOutput:'synthetic-secret'}}});
    send({id:m.id,result:{turn:{id}}});
    setImmediate(()=>{
      notify(id); notify('old-turn');
+     send({method:'item/completed',params:{threadId:'thread-fixture',turnId:id,
+       item:{type:'commandExecution',aggregatedOutput:'synthetic-secret'}}});
      const fail = m.params.input[0].text==='fail';
      send({method:'turn/completed',params:{threadId:'thread-fixture',turn:{id,status:fail?'failed':'completed',
        ...(fail?{error:{message:'synthetic failure'}}:{items:[{type:'agentMessage',text:'verified'}]})}}});
@@ -46,13 +52,18 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const agent = store.create({ workspaceRoot: root, provider: "codex", profileName: "codex" });
   t.after(async () => { await runtime.close(); store.close(); rmSync(root, { recursive: true, force: true }); });
   const observations: AgentUsageObservation[] = [];
+  const activities: AgentActivity[] = [];
+  store.update(agent.id, { status: "running" });
   const onUsage = (event: AgentUsageObservation) => {
     observations.push(event);
     assert(store.recordUsageResult(agent.id, event).isOk());
   };
   await runtime.initialize();
-  const first = await runtime.run({ workspaceRoot: root, prompt: "first" }, { onUsage });
+  const first = await runtime.run({ workspaceRoot: root, prompt: "first" }, { onUsage,
+    onActivity: (activity) => { activities.push(activity); assert(store.recordActivityResult(agent.id, activity).isOk()); } });
   assert(first.isOk());
+  assert.deepEqual(activities, [{ phase: "tool", toolCategory: "build" }, { phase: "provider" }]);
+  assert(!JSON.stringify(store.getById(agent.id)!.progress).includes("synthetic-secret"));
   const failed = await runtime.run({ workspaceRoot: root, prompt: "fail", providerSessionId: "thread-fixture" }, { onUsage });
   assert(failed.isErr());
   assert(observations.length >= 2);
@@ -62,6 +73,6 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   assert.equal(store.usage(agent.id).threads[0]?.totals.totalTokens, 240);
   assert.equal(store.usage(agent.id).observations.length, 2);
   const tolerated = await runtime.run({ workspaceRoot: root, prompt: "callback error", providerSessionId: "thread-fixture" },
-    { onUsage: () => { throw new Error("telemetry store unavailable"); } });
+    { onUsage: () => { throw new Error("telemetry store unavailable"); }, onActivity: () => { throw new Error("progress store unavailable"); } });
   assert(tolerated.isOk(), "telemetry failure must not retry or fail paid work");
 });

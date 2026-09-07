@@ -450,6 +450,16 @@ export function daemonExecArgv(execArgv: readonly string[]): string[] {
       continue;
     }
     if (argument.startsWith("--inspect-port=")) continue;
+    // A diagnostic/embedded caller may run Node with -e/-p or --input-type.
+    // Forwarding those entry-mode arguments executes the caller again instead
+    // of agentd (potentially recursively spawning more diagnostic clients).
+    // Keep loaders/runtime flags, but never inherit a different entry point.
+    if (["-e", "--eval", "-p", "--print", "--input-type"].includes(argument)) {
+      index += 1;
+      continue;
+    }
+    if (/^--(?:eval|print|input-type)=/.test(argument) || /^-[ep].+/.test(argument)) continue;
+    if (argument === "--check" || argument === "-c" || argument === "--test") continue;
     result.push(argument);
   }
   return result;

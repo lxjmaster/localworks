@@ -10,7 +10,8 @@ import {
   type WriteToolInput,
   type AgentToolResult,
 } from "@earendil-works/pi-coding-agent";
-import { resolveAllowedPath } from "./roots.js";
+import { assertAllowedPath, resolveAllowedPath } from "./roots.js";
+import { realpath } from "node:fs/promises";
 
 type McpContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 export type ToolResponse<TDetails = unknown> = {
@@ -61,7 +62,9 @@ async function runTool<TInput, TDetails = unknown>(
 }
 
 export async function readFileTool(input: ReadToolInput, context: ToolContext): Promise<ToolResponse> {
-  const path = resolveAllowedPath(input.path, context.cwd, context.readRoots ?? [context.root]);
+  const roots = context.readRoots ?? [context.root];
+  const path = await realpath(resolveAllowedPath(input.path, context.cwd, roots));
+  assertAllowedPath(path, await Promise.all(roots.map((root) => realpath(root))));
   const tool = createReadTool(context.cwd);
 
   return runTool((params) => tool.execute("read_file", params), {
