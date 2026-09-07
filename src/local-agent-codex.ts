@@ -12,7 +12,7 @@ import {
 } from "./local-agent-errors.js";
 import { removeDevspaceNodeModulesBinFromPath } from "./local-agent-path.js";
 import { parseCodexUsage } from "./agent-usage.js";
-import { summarizeCodexFailure } from "./codex-failure-summary.js";
+import { summarizeCodexFailure, summarizeCodexControlFailure } from "./codex-failure-summary.js";
 import { quotaPreflight } from "./codex-quota-preflight.js";
 import { codexActivity, type AgentActivity } from "./agent-progress.js";
 import { ensureDesktopProject, type ProjectReceipt } from "./codex-projects.js";
@@ -475,13 +475,18 @@ class CodexAppServerRpc {
     if (this.fatalError) return Promise.reject(this.fatalError);
     const id = String(this.nextId++);
     return new Promise((resolve, reject) => {
+      const rejectControl = (cause: Error) => {
+        const detail = summarizeCodexControlFailure(method, cause);
+        reject(new AgentProviderProtocolError({ code: "PROVIDER_PROTOCOL_ERROR", provider: "codex",
+          operation: detail.stage, retryable: detail.retryable, cause, message: detail.message }));
+      };
       const timer = setTimeout(() => {
-        if (this.pending.delete(id)) reject(new Error(`Codex RPC timed out: ${method}. Reconcile before replaying a lifecycle operation.`));
+        if (this.pending.delete(id)) rejectControl(new Error(`Codex RPC timed out: ${method}. Reconcile before replaying a lifecycle operation.`));
       }, timeoutMs);
       timer.unref();
       this.pending.set(id, {
         resolve: (value) => { clearTimeout(timer); resolve(value); },
-        reject: (error) => { clearTimeout(timer); reject(error); },
+        reject: (error) => { clearTimeout(timer); rejectControl(error); },
       });
       this.write({ id, method, ...(params === undefined ? {} : { params }) });
     });
@@ -570,7 +575,12 @@ class CodexAppServerRpc {
       const pending = this.pending.get(id);
       if (!pending) return;
       this.pending.delete(id);
-      if (message.error !== undefined) pending.reject(new Error(protocolErrorText(message.error)));
+      if (message.error !== undefined) {
+        const error = new Error(protocolErrorText(message.error));
+        const code = asRecord(message.error)?.code;
+        if (Number.isSafeInteger(code)) Object.assign(error, { code });
+        pending.reject(error);
+      }
       else pending.resolve(message.result);
       return;
     }

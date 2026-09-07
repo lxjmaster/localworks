@@ -48,3 +48,19 @@ export function summarizeCodexFailure(params: unknown) {
   return { category, httpStatus, retryable, fingerprint, nextAction,
     message: `Codex turn failed: ${category}${httpStatus === undefined ? "" : ` (HTTP ${httpStatus})`}; ${nextAction}; diagnostic=${fingerprint}.` };
 }
+
+/** A rejected lifecycle RPC is not a failed model turn. Preserve its safe stage. */
+export function summarizeCodexControlFailure(method: string, cause: unknown) {
+  const rpc = object(cause);
+  const rpcCode = Number.isSafeInteger(rpc.code) ? Number(rpc.code) : undefined;
+  const raw = cause instanceof Error ? cause.message : typeof rpc.message === "string" ? rpc.message : "";
+  const detail = summarizeCodexFailure({ error: { message: raw } });
+  const stage = /^[A-Za-z]+(?:\/[A-Za-z]+){0,4}$/.test(method) ? method : "unknown_control";
+  const category = rpcCode === -32601 ? "unsupported_rpc" : rpcCode === -32602 ? "invalid_rpc_parameters" : detail.category;
+  const nextAction = category === "unsupported_rpc" || category === "invalid_rpc_parameters"
+    ? "verify_installed_protocol_before_retrying_original_task" : detail.nextAction;
+  const diagnostic = createHash("sha256").update(JSON.stringify([stage, rpcCode, detail.fingerprint])).digest("hex").slice(0, 20);
+  return { stage, category, rpcCode, retryable: detail.retryable && rpcCode !== -32601 && rpcCode !== -32602,
+    nextAction, diagnostic, outcome: "not_confirmed",
+    message: `Codex control request failed: ${stage}; ${category}; ${nextAction}; diagnostic=${diagnostic}.` };
+}
