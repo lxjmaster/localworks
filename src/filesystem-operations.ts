@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep, win32 } from "node:path";
+import { isPathInsideRoot } from "./roots.js";
+import { regularFileReadFlags } from "./runtime-capabilities.js";
 
 export const MAX_FILE_BYTES = 1024 * 1024;
 export type FileOperation =
@@ -33,19 +35,21 @@ async function confinedPath(root: string, path: string): Promise<string> {
   let parent = base;
   for (const part of parts.slice(0, -1)) {
     parent = await realpath(join(parent, part));
-    const rest = relative(base, parent);
-    if (isAbsolute(rest) || rest === ".." || rest.startsWith(`..${sep}`)) fail("Path is outside this workspace.");
+    if (!isPathInsideRoot(parent,base)) fail("Path is outside this workspace.");
     if (!(await lstat(parent)).isDirectory()) fail("Path ancestor is not a directory.");
   }
   return join(parent, parts.at(-1)!);
 }
 
 async function existingFile(path: string, writable: boolean) {
-  if (!(await lstat(path)).isFile()) fail("Expected a regular file; leaf symlinks are not supported.");
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const before=await lstat(path,{bigint:true});
+  if (!before.isFile()) fail("Expected a regular file; leaf symlinks are not supported.");
+  const handle = await open(path, regularFileReadFlags());
   try {
     const stat = await handle.stat();
+    const identity=await handle.stat({bigint:true});
     if (!stat.isFile()) fail("Expected a regular file.");
+    if(identity.dev!==before.dev||identity.ino!==before.ino)fail("File identity changed during open; retry after inspecting the current file.");
     if (writable && stat.nlink !== 1) fail("Cannot modify a multiply linked file.");
     if (stat.size > MAX_FILE_BYTES) fail("Text exceeds 1 MiB.");
     const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
@@ -60,7 +64,7 @@ async function existingFile(path: string, writable: boolean) {
     const content = bytes.toString("utf8");
     textBytes(content);
     if (!Buffer.from(content, "utf8").equals(bytes)) fail("Expected valid UTF-8 text.");
-    return { handle, bytes, content, mode: stat.mode, sha256: hash(bytes) };
+    return { handle, bytes, content, mode: stat.mode, identity:{dev:identity.dev,ino:identity.ino}, sha256: hash(bytes) };
   } catch (error) { await handle.close(); throw error; }
 }
 
@@ -104,22 +108,32 @@ export async function executeFileOperation(root: string, input: FileOperation): 
   }
   if (input.action === "create") {
     const bytes = textBytes(input.content);
+    await requireMissing(path);
     const handle = await open(path, "wx", 0o666);
     try { await handle.writeFile(bytes); } finally { await handle.close(); }
     return { status: "created", path: input.path, bytes: bytes.length, sha256: hash(bytes) };
   }
   const writable = input.action === "edit" || input.action === "replace";
   const file = await existingFile(path, writable);
+  let closed=false;
+  const closeSource=async()=>{if(!closed){await file.handle.close();closed=true;}};
+  const verifyIdentity=async()=>{
+    const current=await lstat(path,{bigint:true});
+    if(!current.isFile()||current.dev!==file.identity.dev||current.ino!==file.identity.ino)fail("File identity changed before mutation; inspect and retry.");
+  };
   try {
     if (input.action === "read") return { path: input.path, content: file.content, bytes: file.bytes.length, sha256: file.sha256 };
     if (!/^[a-f0-9]{64}$/i.test(input.expectedSha256 ?? "")) fail("expectedSha256 must be a SHA-256 hex digest.");
     if (file.sha256 !== input.expectedSha256.toLowerCase()) fail("File version changed; read the file again before retrying.");
     if (input.action === "delete") {
+      await closeSource();await verifyIdentity();
       await unlink(path);
       return { status: "deleted", path: input.path };
     }
     if (input.action === "move") {
       const destination = await confinedPath(root, input.destination);
+      await requireMissing(destination);
+      await closeSource();await verifyIdentity();
       // link() fails if any destination entry exists, including a dangling symlink.
       await link(path, destination);
       try { await unlink(path); } catch {
@@ -134,9 +148,15 @@ export async function executeFileOperation(root: string, input: FileOperation): 
     try {
       try { await staged.writeFile(bytes); await staged.chmod(file.mode & 0o777); }
       finally { await staged.close(); }
+      await closeSource();await verifyIdentity();
       await rename(temporary, path);
       moved = true;
     } finally { if (!moved) await unlink(temporary); }
     return { status: "updated", path: input.path, bytes: bytes.length, sha256: hash(bytes) };
-  } finally { await file.handle.close(); }
+  } finally { await closeSource(); }
+}
+
+async function requireMissing(path:string):Promise<void>{
+  try{await lstat(path);}catch(error){if((error as NodeJS.ErrnoException).code==="ENOENT")return;throw error;}
+  throw Object.assign(new Error("Destination already exists."),{code:"EEXIST"});
 }

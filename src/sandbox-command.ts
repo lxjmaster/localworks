@@ -1,10 +1,13 @@
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
+// This policy targets POSIX backends only. Keep pure policy generation stable
+// even when unit-tested by a native Windows Node runtime.
+const { dirname, isAbsolute, join, relative, resolve, sep } = posix;
 
 export interface SandboxCommandOptions {
   workspaceRoot: string;

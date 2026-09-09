@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve, sep, win32 } from "node:path";
+import { isAbsolute, relative, resolve, sep, win32, posix } from "node:path";
 
 export function normalizeWslPath(path: string): string | undefined {
   const match = /^\\\\(?:\?\\UNC\\)?(?:wsl\.localhost|wsl\$)\\([^\\]+)(.*)$/i.exec(win32.normalize(path));
@@ -27,10 +27,11 @@ export function expandHomePath(path: string): string {
   return path;
 }
 
-export function isPathInsideRoot(path: string, root: string): boolean {
-  const resolvedPath = resolve(expandHomePath(path));
-  const resolvedRoot = resolve(expandHomePath(root));
-  if (process.platform === "win32") {
+export function isPathInsideRoot(path: string, root: string, platform:NodeJS.Platform=process.platform): boolean {
+  const paths=platform==="win32"?win32:posix;
+  const resolvedPath = paths.resolve(expandHomePath(path));
+  const resolvedRoot = paths.resolve(expandHomePath(root));
+  if (platform === "win32") {
     const wslPath = normalizeWslPath(resolvedPath);
     const wslRoot = normalizeWslPath(resolvedRoot);
     if (wslPath || wslRoot) {
@@ -38,14 +39,14 @@ export function isPathInsideRoot(path: string, root: string): boolean {
       return wslPath === wslRoot || wslPath.startsWith(`${wslRoot.replace(/\\$/, "")}\\`);
     }
   }
-  const relationship = relative(resolvedRoot, resolvedPath);
+  const relationship = paths.relative(resolvedRoot, resolvedPath);
 
   return (
     relationship === "" ||
-    (!isAbsolute(relationship) &&
+    (!paths.isAbsolute(relationship) &&
       !relationship.startsWith("..") &&
       relationship !== ".." &&
-      !relationship.includes(`..${sep}`))
+      !relationship.includes(`..${paths.sep}`))
   );
 }
 

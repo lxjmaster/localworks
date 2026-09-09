@@ -3,6 +3,7 @@ import { registerAgentTaskTool } from "./agent-task.js";
 import { registerFileTools } from "./files.js";
 import { registerWebCommands } from "./web-commands.js";
 import type { ToolRegistrationContext } from "./types.js";
+import { controlOutputShape } from "./control-output.js";
 
 const groups = {
   agent_task: [
@@ -32,6 +33,7 @@ export function webControlTarget(target: ToolRegistrationContext["server"]): Too
           ...definition,
           title: variant.name.replaceAll("_", " "),
           description: variant.description,
+          outputSchema: controlOutputShape(variant.name,variant.actions),
           inputSchema: { ...definition.inputSchema, action: z.enum(variant.actions),
             ...(definition.inputSchema.workRunId ? { workRunId: definition.inputSchema.workRunId.describe("Work record identifier from work_update or agent_execute.") } : {}) },
           annotations: { ...definition.annotations, readOnlyHint: variant.read,
@@ -43,11 +45,14 @@ export function webControlTarget(target: ToolRegistrationContext["server"]): Too
             return { isError: true, content: [{ type: "text", text: "Unsupported action for this tool." }] };
           }
           const result = await handler(input, extra);
-          return { ...result, content: result.content?.map((block: any) => {
+          const content = result.content?.map((block: any) => {
             if (block.type !== "text") return block;
             try { return { ...block, text: JSON.stringify(remapActions(JSON.parse(block.text))) }; }
             catch { return block; }
-          }) };
+          });
+          const block=content?.find((entry: any)=>entry.type==="text");
+          const data=block ? JSON.parse(block.text) : undefined;
+          return { ...result, content, structuredContent:{action:input.action,data} };
         });
       }
     }) as ToolRegistrationContext["server"]["registerTool"],

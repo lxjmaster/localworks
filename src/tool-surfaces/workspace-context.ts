@@ -6,9 +6,30 @@ import { readContextFile } from "../workspace-context.js";
 import type { ToolRegistrationContext } from "./types.js";
 import { trackedWork } from "./work-task.js";
 
+const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
+const contextOutputSchema = z.object({
+  providerInvoked: z.literal(false),
+  entries: z.array(z.union([
+    z.object({ name: z.string(), kind: z.enum(["symlink", "directory", "file"]) }),
+    z.object({
+      path: z.string(), sha256, bytes: z.number().int().nonnegative(), totalLines: z.number().int().min(1),
+      lines: z.array(z.object({ line: z.number().int().min(1), text: z.string().max(2000), lineTruncated: z.literal(true).optional() })).max(250),
+      truncated: z.boolean(), nextLine: z.number().int().min(1).nullable(),
+    }),
+  ])).max(100).describe("List returns directory entries; capture/search return file entries with selected lines and full-file hashes."),
+  total: z.number().int().nonnegative().optional().describe("Required for list: total directory entry count."),
+  nextOffset: z.number().int().nonnegative().nullable().optional().describe("Required for list: next page offset, or null at the end."),
+  contextId: sha256.optional().describe("Required for capture/search: hash of selected file identities and versions."),
+  refs: z.array(z.object({ path: z.string(), sha256 })).max(24).optional().describe("Required for capture/search: workspace-relative references; external skills are excluded."),
+  bytesRead: z.number().int().min(0).max(4 * 1024 * 1024).optional().describe("Required for capture/search: total bytes read."),
+  consistency: z.string().optional().describe("Required for capture/search: evidence consistency limitations."),
+  delegation: z.string().optional().describe("Required for capture/search: mode-specific delegation guidance."),
+});
+
 /** Deterministic host-side context preparation. No agent client, model, or shell. */
 export function registerWorkspaceContextTool({ server, config, workspaces, processSessions }: ToolRegistrationContext): void {
   server.registerTool("workspace_context", {
+    outputSchema: contextOutputSchema,
     title: "Inspect workspace directly without Codex",
     description: "Host-first local inspection: list one directory, capture selected source ranges and full-file hashes, or search a literal in explicitly selected files. No model invocation, automatic repository survey or recursive traversal. Prefer this and read for context gathering before deciding whether a Codex worker is needed. Follow applicable project instructions first. Captures are versioned evidence, not a shared model memory or immutable checkout.",
     inputSchema: {
@@ -71,6 +92,6 @@ export function registerWorkspaceContextTool({ server, config, workspaces, proce
         delegation: `Use the host to summarize relevant facts; pass context: { summary, files: refs } to ${config?.toolMode === "web" ? "agent_execute" : "agent_task"} with action: "start" only when a worker is actually needed.` };
     });
     const value = input.workRunId ? await trackedWork(config.stateDir, input.workRunId, { root: workspace.root, workspaceId: workspace.id }, "workspace_context", capture) : await capture();
-    return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
+    return { content: [{ type: "text" as const, text: JSON.stringify(value) }], structuredContent: value };
   });
 }

@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WebCommands } from "./tool-surfaces/web-commands.js";
+import { WebCommands,resolveWebCommand } from "./tool-surfaces/web-commands.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import type { ToolRegistrationContext } from "./tool-surfaces/types.js";
 import type { SandboxCommandOptions, SandboxCommandResult } from "./sandbox-command.js";
@@ -16,6 +16,15 @@ async function until(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; !predicate() && attempt < 1000; attempt++) await new Promise(resolve => setTimeout(resolve, 2));
   assert(predicate(), "Expected asynchronous command state");
 }
+
+test("logical program arguments remain literal and cannot alias changed requests",()=>{
+  assert.equal(resolveWebCommand({program:"git",args:["status","--short"]}),"'git' 'status' '--short'");
+  assert.equal(resolveWebCommand({command:"git status"}),"git status");
+  assert.throws(()=>resolveWebCommand({command:"git status",program:"git"}),/either/);
+  assert.throws(()=>resolveWebCommand({program:"/usr/bin/git"}),/tool name/);
+  assert.throws(()=>resolveWebCommand({args:["status"]}),/tool name/);
+  assert.throws(()=>resolveWebCommand({program:"node",args:["\0"]}),/argument/);
+});
 
 test("web commands deduplicate starts, retain results, scope queries and drain on shutdown", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "localworks-command-contract-"));

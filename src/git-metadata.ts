@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { AccessDeniedError, canonicalPathIdentity, expandHomePath, isPathInsideRoot } from "./roots.js";
+import { regularFileReadFlags } from "./runtime-capabilities.js";
 
 export interface GitMetadata {
   /** Canonical directories for the caller's sandbox read allowlist. */
@@ -61,13 +62,13 @@ export async function resolveGitMetadata(
   };
   const pointer = async (path: string): Promise<string> => {
     const target = await canonical(path);
-    const before = await lstat(path);
+    const before = await lstat(path,{bigint:true});
     if (!before.isFile()) invalid(`expected regular pointer file: ${path}`);
     // NONBLOCK prevents a raced FIFO open from hanging; NOFOLLOW rejects a raced
     // final symlink. fstat binds validation to the descriptor actually read.
-    const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const handle = await open(target, regularFileReadFlags());
     try {
-      const info = await handle.stat();
+      const info = await handle.stat({bigint:true});
       if (!info.isFile() || info.size > POINTER_LIMIT || info.dev !== before.dev || info.ino !== before.ino) {
         invalid(`non-regular, oversized or changed pointer: ${path}`);
       }

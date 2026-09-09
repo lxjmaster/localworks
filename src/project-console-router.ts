@@ -1,9 +1,10 @@
 import express, { type Request, type Response } from "express";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import * as z from "zod/v4";
 import type { ServerConfig } from "./config.js";
-import { assertAllowedPath } from "./roots.js";
+import { assertAllowedPath, expandHomePath } from "./roots.js";
 import { WorkLedger } from "./work-ledger.js";
 import { ProjectArchive } from "./project-archive.js";
 import { CodexThreadControl, type ThreadControl } from "./codex-thread-control.js";
@@ -91,11 +92,20 @@ export function createProjectConsoleRouter(config: ServerConfig, options: {
   router.get("/api/session", (_req, res) => res.json({ authenticated: true, csrf: res.locals.consoleSession.session.csrf, remoteEnabled: settings.allowRemote }));
   router.post("/api/logout", (req, res) => { sessions.delete(res.locals.consoleSession.key); setCookie(req, res, "", 0); res.json({ authenticated: false }); });
 
+  const assertApprovedProject = (root: string) => {
+    // Compare filesystem identities on both sides (e.g. /var and /private/var).
+    // Resolve on each request so stale or escaping symlinks cannot grant access.
+    const approvedRoots = config.allowedRoots.flatMap((approvedRoot) => {
+      try { return [realpathSync(expandHomePath(approvedRoot))]; }
+      catch { return []; }
+    });
+    return assertAllowedPath(realpathSync(expandHomePath(root)), approvedRoots);
+  };
   const withLedger = (fn: (req: Request, ledger: WorkLedger) => unknown | Promise<unknown>) => async (req: Request, res: Response) => {
     const ledger = new WorkLedger(config.stateDir);
     try {
       const projectId = stringParam(req.params.projectId);
-      if (projectId) assertAllowedPath(ledger.getProject(projectId).root, config.allowedRoots);
+      if (projectId) assertApprovedProject(ledger.getProject(projectId).root);
       res.json(await fn(req, ledger));
     } catch { res.status(409).json({ code: "CONSOLE_OPERATION_REJECTED", message: "请求未通过项目、状态或输入校验。刷新后查看任务状态；不会自动重放归档。" }); }
     finally { ledger.close(); }
@@ -103,8 +113,8 @@ export function createProjectConsoleRouter(config: ServerConfig, options: {
   router.get("/api/projects", withLedger((_req, ledger) => {
     // Only DevSpace-registered projects; do not scan Codex's private chat catalog on page refresh.
     const roots = ledger.db.prepare("select root from workspace_sessions union select workspace_root as root from local_agent_sessions").all() as { root: string }[];
-    for (const { root } of roots) { try { assertAllowedPath(root, config.allowedRoots); ledger.importLegacy(root); } catch { /* inaccessible history remains undisclosed */ } }
-    return { projects: ledger.projects().filter((project) => { try { assertAllowedPath(project.root, config.allowedRoots); return true; } catch { return false; } })
+    for (const { root } of roots) { try { assertApprovedProject(root); ledger.importLegacy(root); } catch { /* inaccessible history remains undisclosed */ } }
+    return { projects: ledger.projects().filter((project) => { try { assertApprovedProject(project.root); return true; } catch { return false; } })
       .map((project) => ({ id: project.id, name: project.name, root: project.root, ...ledger.projectUsage(project.id) })) };
   }));
   router.get("/api/projects/:projectId/runs", withLedger((req, ledger) => {

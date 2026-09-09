@@ -8,6 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { ProcessSessionManager } from "../process-sessions.js";
 import { ExecutionConflictError, ExecutionCoordinator } from "../execution-coordinator.js";
 import { WorkLedger } from "../work-ledger.js";
@@ -39,7 +40,17 @@ for (const toolMode of ["web", "full"] as const) test(`${toolMode}: MCP file con
   await server.connect(a); await client.connect(b);
   const listed = (await client.listTools()).tools;
   assert.deepEqual(listed.map((tool) => tool.name).sort(), ["create_directory", "create_file", "delete_file", "edit_file", "move_file", "read_file", "replace_file"]);
+  const statuses: Record<string, string[]> = { read_file: ["read", "error"], create_file: ["created", "error"],
+    create_directory: ["created", "exists", "error"], edit_file: ["updated", "error"], replace_file: ["updated", "error"],
+    move_file: ["moved", "error"], delete_file: ["deleted", "error"] };
   for (const tool of listed) {
+    assert.equal(tool.outputSchema?.type, "object");
+    assert.deepEqual(tool.outputSchema?.required, ["path", "status"]);
+    assert.deepEqual((tool.outputSchema?.properties?.status as { enum: string[] }).enum, statuses[tool.name]);
+    const validate = new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
+    assert.equal(validate({}).valid, false);
+    assert.equal(validate({ path: "a", status: "invented" }).valid, false);
+    assert.equal(validate({ path: "a", status: "error", error: { code: 123, message: "bad" } }).valid, false);
     assert.ok(tool.inputSchema.required?.includes("workspaceId"));
     assert.ok(tool.inputSchema.properties?.workRunId);
     assert.ok(!tool.inputSchema.required?.includes("workRunId"));
@@ -47,12 +58,23 @@ for (const toolMode of ["web", "full"] as const) test(`${toolMode}: MCP file con
     assert.equal(tool.annotations?.destructiveHint, !["read_file", "create_file", "create_directory"].includes(tool.name));
   }
   const call = async (name: string, args: Record<string, unknown>) => {
-    return CallToolResultSchema.parse(await client.callTool({ name, arguments: { workspaceId: "ws", ...args } }));
+    const response = CallToolResultSchema.parse(await client.callTool({ name, arguments: { workspaceId: "ws", ...args } }));
+    if (response.structuredContent) {
+      assert.equal(response.structuredContent.path, args.path);
+      const legacy={...response.structuredContent};
+      if(response.isError)delete legacy.path;
+      else if(name==="read_file")delete legacy.status;
+      assert.deepEqual(response.content, [{ type: "text", text: JSON.stringify(legacy) }]);
+      if (response.isError) assert.equal(response.structuredContent.status, "error");
+    }
+    return response;
   };
   assert.equal((await call("create_file", { path: "a", content: "initial" })).isError, undefined);
   const result = await call("read_file", { path: "a" });
   assert.equal(result.structuredContent?.content, "initial");
+  assert.equal(result.structuredContent?.status, "read");
   assert.equal(result.structuredContent?.sha256, createHash("sha256").update("initial").digest("hex"));
+  assert.deepEqual(result.content,[{type:"text",text:JSON.stringify({path:"a",content:"initial",bytes:7,sha256:createHash("sha256").update("initial").digest("hex")})}]);
   assert.equal(reads, 1); assert.equal(writes, 1);
   assert.equal((await call("create_directory", { path: "src" })).structuredContent?.status, "created");
   assert.equal((await call("create_directory", { path: "src" })).structuredContent?.status, "exists");
@@ -91,6 +113,26 @@ for (const toolMode of ["web", "full"] as const) test(`${toolMode}: MCP file con
     { kind: "read_file", status: "completed" }, { kind: "read_file", status: "failed" },
   ]);
   assert.equal(await readFile(join(root, "tracked"), "utf8"), "ok");
+  let version = (await call("read_file", { path: "tracked" })).structuredContent?.sha256;
+  const edited = await call("edit_file", { path: "tracked", expectedSha256: version, edits: [{ oldText: "ok", newText: "edited" }] });
+  assert.equal(edited.isError, undefined); assert.equal(edited.structuredContent?.status, "updated");
+  assert.equal(edited.structuredContent?.bytes, 6);
+  version = edited.structuredContent?.sha256;
+  const replaced = await call("replace_file", { path: "tracked", expectedSha256: version, content: "replaced" });
+  assert.equal(replaced.isError, undefined); assert.equal(replaced.structuredContent?.status, "updated");
+  assert.equal(replaced.structuredContent?.bytes, 8);
+  version = replaced.structuredContent?.sha256;
+  const moved = await call("move_file", { path: "tracked", destination: "moved", expectedSha256: version });
+  assert.equal(moved.isError, undefined); assert.equal(moved.structuredContent?.status, "moved");
+  assert.equal(moved.structuredContent?.destination, "moved"); assert.equal(moved.structuredContent?.sha256, version);
+  const deleted = await call("delete_file", { path: "moved", expectedSha256: version });
+  assert.equal(deleted.isError, undefined); assert.equal(deleted.structuredContent?.status, "deleted");
+  for (const name of ["edit_file", "move_file", "delete_file"]) {
+    assert.equal((await call(name, { path: "missing", expectedSha256: version,
+      ...(name === "edit_file" ? { edits: [{ oldText: "x", newText: "y" }] } : {}),
+      ...(name === "move_file" ? { destination: "unused" } : {}),
+    })).isError, true);
+  }
   const owner = new ExecutionCoordinator(join(root, "state"));
   const claim = owner.acquire({ workspaceRoot: root, kind: "agent", access: "read", agentId: "agt_visible" });
   try {

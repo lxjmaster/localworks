@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { registerWorkspaceContextTool } from "./tool-surfaces/workspace-context.js";
 import type { ToolRegistrationContext } from "./tool-surfaces/types.js";
 import { ProcessSessionManager } from "./process-sessions.js";
@@ -26,9 +27,26 @@ for (const toolMode of ["web", "full"] as const) test(`${toolMode}: host capture
   const client = new Client({ name: "host", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a); await client.connect(b);
   t.after(async () => { await client.close(); await server.close(); processSessions.shutdown(); rmSync(root, { recursive: true, force: true }); });
+  const tool = (await client.listTools()).tools.find(({ name }) => name === "workspace_context")!;
+  assert.equal(tool.outputSchema?.type, "object");
+  assert.deepEqual(tool.outputSchema?.required, ["providerInvoked", "entries"]);
+  assert.equal((tool.outputSchema?.properties?.providerInvoked as { const: boolean }).const, false);
+  const validate = new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
+  assert.equal(validate({}).valid, false);
+  assert.equal(validate({ providerInvoked: true, entries: [] }).valid, false);
+  assert.equal(validate({ providerInvoked: false, entries: [{}] }).valid, false);
+  assert.equal(validate({ providerInvoked: false, entries: [{ name: "x", kind: "unknown" }] }).valid, false);
   const call = async (args: Record<string, unknown>) => {
     const response = await client.callTool({ name: "workspace_context", arguments: { workspaceId: "ws", ...args } });
     const text = (response.content as Array<{ type: string; text: string }>).find((item) => item.type === "text")!.text;
+    if (!response.isError) {
+      assert.deepEqual(response.structuredContent, JSON.parse(text));
+      assert.equal(validate(response.structuredContent).valid, true);
+    } else {
+      assert.equal(response.isError, true);
+      assert.equal(response.structuredContent, undefined);
+      assert.doesNotMatch(text, /Output validation error|Structured content does not match/);
+    }
     return { error: response.isError, value: response.isError ? text : JSON.parse(text) };
   };
   const listed = await call({ action: "list" });
@@ -41,6 +59,15 @@ for (const toolMode of ["web", "full"] as const) test(`${toolMode}: host capture
   assert.match(captured.value.delegation, /context: \{ summary, files: refs \}/);
   const searched = await call({ action: "search", query: "value", files: [{ path: "source.ts" }] });
   assert.equal(searched.value.entries[0].lines[0].line, 2); assert.equal(searched.value.refs[0].sha256, captured.value.refs[0].sha256);
+  assert.deepEqual((await call({ action: "list", offset: 100 })).value.entries, []);
+  const noMatches = await call({ action: "search", query: "absent literal", files: [{ path: "source.ts" }] });
+  assert.deepEqual(noMatches.value.entries[0].lines, []); assert.equal(noMatches.value.entries[0].nextLine, null);
+  writeFileSync(join(project, "long.ts"), "x".repeat(2001));
+  const long = await call({ action: "capture", files: [{ path: "long.ts" }] });
+  assert.equal(long.value.entries[0].lines[0].lineTruncated, true);
+  assert.equal(long.value.entries[0].lines[0].text.length, 2000);
+  assert.equal((await call({ action: "search", files: [{ path: "source.ts" }] })).error, true);
+  assert.equal((await call({ action: "invalid" })).error, true);
   writeFileSync(join(project, "source.ts"), "changed\n");
   const changed = await call({ action: "capture", files: [{ path: "source.ts" }] });
   assert.notEqual(changed.value.contextId, captured.value.contextId);

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { relative } from "node:path";
 import { resolveGitMetadata } from "./git-metadata.js";
+import { runtimeCapabilities, runtimeCapabilitiesSchema } from "./runtime-capabilities.js";
 import { ensureDesktopProject } from "./codex-projects.js";
 import { WorkLedger as ProjectWorkLedger } from "./work-ledger.js";
 import { readFileSync } from "node:fs";
@@ -420,6 +421,7 @@ function registerMcpSurface(
       },
       outputSchema: {
         workspaceId: z.string(),
+        runtime: runtimeCapabilitiesSchema.optional(),
         gitContext: z.object({ checkoutRoot: z.string(), workingDirectory: z.string(), instruction: z.string() }).optional(),
         projectRegistration: z.unknown().optional(),
         root: z.string(),
@@ -600,6 +602,7 @@ function registerMcpSurface(
         },
         structuredContent: {
           workspaceId: workspace.id,
+          ...(config.toolMode==="web"?{runtime:runtimeCapabilities()}:{}),
           ...(gitContext ? { gitContext } : {}),
           projectRegistration,
           root: workspace.root,

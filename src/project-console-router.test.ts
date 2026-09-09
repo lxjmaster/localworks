@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import express from "express";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -11,7 +11,8 @@ import type { ServerConfig } from "./config.js";
 import { WorkLedger } from "./work-ledger.js";
 import { createProjectConsoleRouter } from "./project-console-router.js";
 
-test("console authentication, source scopes, CSRF and session expiry protect all management operations", async (t) => {
+for (const alias of [false, true]) {
+test(`console authentication, source scopes, CSRF and session expiry protect all management operations${alias ? " through a real root alias" : ""}`, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "devspace-console-http-")); const project = join(root, "project");
   mkdirSync(join(project, ".git"), { recursive: true }); const state = join(root, "state");
   const assetDirectory = join(root, ".candidate", "ui"); mkdirSync(assetDirectory, { recursive: true });
@@ -19,9 +20,16 @@ test("console authentication, source scopes, CSRF and session expiry protect all
   const ledger = new WorkLedger(state);
   const run = ledger.begin({ root: project, workspaceId: "ws", workItemId: "ui", runKey: "first", title: "<img src=x onerror=alert(1)>", origin: { entryPoint: "chatgpt_mcp", evidence: "client_reported" } });
   ledger.finish(run.id, { status: "completed", acceptance: "not_applicable", summary: "host only", evidence: [] });
-  const outside = join(root, "outside"); mkdirSync(outside); const outsideProject = ledger.project(outside);
+  const outside = join(root, "project-outside"); mkdirSync(outside); const outsideProject = ledger.project(outside);
+  const approvedRoot = alias ? join(root, "approved-alias") : project;
+  if (alias) {
+    symlinkSync(project, approvedRoot, process.platform === "win32" ? "junction" : "dir");
+    assert.notEqual(approvedRoot, realpathSync(approvedRoot));
+  }
+  const escape = join(project, "escape");
+  symlinkSync(outside, escape, process.platform === "win32" ? "junction" : "dir");
   let time = Date.now(); let providerCreated = 0;
-  const config = { stateDir: state, allowedRoots: [project], publicBaseUrl: "https://controlled.example", oauth: { ownerToken: "fixture-owner-token-not-real" },
+  const config = { stateDir: state, allowedRoots: [join(root, "missing-root"), approvedRoot], publicBaseUrl: "https://controlled.example", oauth: { ownerToken: "fixture-owner-token-not-real" },
     console: { enabled: true, allowRemote: false, sessionTtlSeconds: 300 } } as ServerConfig;
   const consoleApi = createProjectConsoleRouter(config, { assetDirectory, clock: () => time,
     providerFactory: () => { providerCreated++; throw new Error("No provider needed for ordinary browsing"); } });
@@ -46,12 +54,20 @@ test("console authentication, source scopes, CSRF and session expiry protect all
   const list = await projects.json() as { projects: { id: string }[] }; assert.equal(list.projects.length, 1); assert.equal(list.projects[0]!.id, run.project_id);
   assert.equal(providerCreated, 0, "Page refresh must not start a provider");
   assert.equal((await request(`/api/projects/${outsideProject.id}/runs`, { headers: { Cookie: cookie } })).status, 409);
+  // Stored history can retain a lexical path that now traverses an outside link.
+  ledger.db.prepare("update console_projects set root=? where id=?").run(escape, outsideProject.id);
+  const escapedList = await request("/api/projects", { headers: { Cookie: cookie } });
+  assert.equal(escapedList.status, 200);
+  assert.deepEqual((await escapedList.json() as { projects: { id: string }[] }).projects.map(({ id }) => id), [run.project_id]);
+  assert.equal((await request(`/api/projects/${outsideProject.id}/runs`, { headers: { Cookie: cookie } })).status, 409);
   const runs = await request(`/api/projects/${run.project_id}/runs`, { headers: { Cookie: cookie } });
   const entries = await runs.json() as { entries: { usageStatus: string; codexUsage: { totalTokens: number } }[] };
   assert.equal(entries.entries[0]!.usageStatus, "not_used"); assert.equal(entries.entries[0]!.codexUsage.totalTokens, 0);
   assert.equal((await request("/api/logout", { method: "POST", headers: { Cookie: cookie, Origin: base }, body: "{}" })).status, 403);
+  assert.equal((await request("/api/logout", { method: "POST", headers: { ...authenticated, "X-DevSpace-CSRF": "invalid" }, body: "{}" })).status, 403);
   assert.equal(await rawStatus({ Cookie: cookie, Host: "evil.example" }), 403);
   assert.equal(await rawStatus({ Cookie: cookie, Host: "controlled.example", "X-Forwarded-Proto": "https" }), 403);
   time += 301000; assert.equal((await request("/api/session", { headers: { Cookie: cookie } })).status, 401);
   assert.equal((await request("/api/logout", { method: "POST", headers: authenticated, body: "{}" })).status, 401);
 });
+}

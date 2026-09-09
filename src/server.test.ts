@@ -79,6 +79,7 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
     await t.test(mode, async (nested) => {
       const context = await fixture(nested, { toolMode: mode, uiEnabled: false });
       const tools = await context.client.listTools();
+      if(mode==="web")for(const tool of tools.tools)assert(tool.outputSchema,`Missing output schema: ${tool.name}`);
 
       assert.deepEqual(
         tools.tools.map((tool) => tool.name).sort(),
@@ -130,6 +131,31 @@ test("web MCP completes versioned edits and rejects writes through query contrac
   assert(!(await call("show_changes", {})).isError);
 });
 
+test("web control output schemas validate real ledger results and structured errors",async t=>{
+  const context=await fixture(t,{toolMode:"web",uiEnabled:false});
+  await context.client.listTools();
+  const {workspaceId}=structuredContent(await callOpen(context.client,context.project,"control-output"));
+  const call=async(name:string,args:Record<string,unknown>)=>{
+    const result=await context.client.callTool({name,arguments:{workspaceId,...args}});
+    const structured=result.structuredContent as {action:string;data:Record<string,unknown>}|undefined;
+    assert(structured,JSON.stringify(result));assert.equal(structured.action,args.action);
+    assert.deepEqual(structured.data,JSON.parse((result.content as Array<{text:string}>)[0].text));
+    return {result,data:structured.data};
+  };
+  const begin=await call("work_update",{action:"begin",workItemId:"fixture",runKey:"one",title:"fixture"});
+  assert(!begin.result.isError,JSON.stringify(begin));
+  const workRunId=begin.data.workRunId;
+  for(const action of ["list","get","snapshot","history"])assert(!(await call("work_query",{action,workRunId})).result.isError);
+  assert(!(await call("work_update",{action:"record",workRunId,requestKey:"one",label:"verified"})).result.isError);
+  const finished=await call("work_update",{action:"finish",workRunId,status:"completed",acceptance:"passed",summary:"verified",evidence:[{label:"schema check",reference:"fixture",outcome:"passed"}]});
+  assert(!finished.result.isError,JSON.stringify(finished));
+  assert(!(await call("agent_query",{action:"claims"})).result.isError);
+  assert.equal((await call("agent_execute",{action:"start"})).result.isError,true);
+  assert.equal((await call("work_query",{action:"get",workRunId:"missing"})).result.isError,true);
+  const failed=await context.client.callTool({name:"command_status",arguments:{workspaceId,sessionId:"missing"}});
+  assert.equal(failed.isError,true);
+});
+
 test("nested web workspace advertises explicit Git context without broadening file scope", async t => {
   const context=await fixture(t,{toolMode:"web",git:true,uiEnabled:false});
   const nested=join(context.project,"nested");await mkdir(nested);
@@ -171,6 +197,15 @@ test("web MCP runs a real sandboxed project check and retains its result", {
   assert.equal(result.outputTruncated, true);
   assert.equal(structuredContent(await call("read_file", { path: "checked.txt" })).content, "verified");
   assert.deepEqual(textResult(await call("command_status", { sessionId: started.sessionId })), result);
+  const literal="$(printf should-not-expand); 'quotes'";
+  const argsStarted=textResult(await call("command_start",{requestKey:"literal-args",program:"node",args:["-e","console.log(process.argv[1])",literal]}));
+  let argsResult=argsStarted;
+  for(let attempt=0;argsResult.running&&attempt<600;attempt++){
+    await new Promise(resolve=>setTimeout(resolve,25));
+    argsResult=textResult(await call("command_status",{sessionId:argsStarted.sessionId}));
+  }
+  assert.equal(argsResult.exitCode,0,JSON.stringify(argsResult));
+  assert.equal(argsResult.output.trim(),literal);
 });
 
 test("web MCP owner listening config starts an HTTP server and stop releases its port", {

@@ -85,6 +85,10 @@ sandboxed. No state deletion or tunnel change is needed for a tool-mode rollback
 
 ## Contracts
 
+All web tools now publish `outputSchema`; refresh host metadata after upgrading.
+See [platform compatibility](platform-compatibility.md) for output shapes, the
+logical `program`/`args` execution form and Windows/WSL migration limits.
+
 For managed worktrees, choose `workspaces.worktreeRoot` outside protected service
 or credential directories, for example a dedicated folder inside Projects. The
 configured worktree root is considered owner-approved only for registry-managed
