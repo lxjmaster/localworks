@@ -1,12 +1,12 @@
 {
-  "$id": "https://raw.githubusercontent.com/Waishnav/devspace/main/schema/v1/devspace.schema.json",
+  "$id": "https://raw.githubusercontent.com/lxjmaster/localworks/main/schema/v1/devspace.schema.json",
   "title": "DevSpace configuration",
   "description": "Versioned configuration for a local DevSpace MCP server.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
     "$schema": {
-      "default": "https://raw.githubusercontent.com/Waishnav/devspace/main/schema/v1/devspace.schema.json",
+      "default": "https://raw.githubusercontent.com/lxjmaster/localworks/main/schema/v1/devspace.schema.json",
       "type": "string",
       "format": "uri"
     },
@@ -129,6 +129,11 @@
                 "type": "string",
                 "minLength": 1
               }
+            },
+            "gitMetadataWrite": {
+              "default": false,
+              "description": "Allow writes to validated linked-worktree Git metadata inside approved roots. Shared repository refs/objects may be affected; web commands coordinate on the common Git directory.",
+              "type": "boolean"
             },
             "allowLocalBinding": {
               "default": false,

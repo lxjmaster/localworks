@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, rm, symlink, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { prepareProjectRoots, projectPathKey, registerProject, type ProjectControl, type ProjectMethod } from "./codex-projects.js";
+import { prepareProjectRoots, projectPathKey, registerProject, ensureDesktopProject, type ProjectControl, type ProjectMethod } from "./codex-projects.js";
+
+test("legacy desktop state does not imply a configured non-Windows desktop adapter", { skip: process.platform === "win32" }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "localworks-desktop-capability-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, ".codex-global-state.json"), "{}");
+  const result = await ensureDesktopProject([root], [], { CODEX_HOME: root });
+  assert.equal(result.status, "not_applicable");
+  assert.equal(result.code, "DESKTOP_ADAPTER_NOT_CONFIGURED");
+  assert.equal(result.projectId, undefined);
+  assert.match(result.action!, /no Desktop registration was attempted/);
+});
 
 function fixture() {
   const home = "C:\\Users\\fixture\\.codex", root = "D:\\projects\\voice-memory";

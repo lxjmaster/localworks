@@ -7,6 +7,8 @@ import { StringDecoder } from "node:string_decoder";
 import { runSandboxCommand, SandboxCleanupError } from "../sandbox-command.js";
 import type { ToolRegistrationContext } from "./types.js";
 import { CommandReceipts, type CommandSnapshot } from "../command-receipts.js";
+import { resolveGitMetadata } from "../git-metadata.js";
+import { canonicalPathIdentity } from "../roots.js";
 
 type CommandInput = { workspaceId: string; requestKey: string; command: string; workingDirectory?: string; timeoutMs?: number };
 type Snapshot = CommandSnapshot;
@@ -38,8 +40,13 @@ export class WebCommands {
     }
     if (this.sessions.size >= 128) throw new Error("Concurrent command limit reached; wait for active commands to finish.");
     const cwd = await realpath(this.context.workspaces.resolveWorkingDirectory(workspace, input.workingDirectory));
+    const approvedRoots = [...(this.context.config.allowedRoots ?? [root]),
+      ...(workspace.mode === "worktree" && this.context.config.worktreeRoot ? [this.context.config.worktreeRoot] : [])];
     const rest = relative(root, cwd);
     if (isAbsolute(rest) || rest === ".." || rest.startsWith(`..${sep}`)) throw new Error("Working directory escapes the workspace.");
+    const gitMetadata = await resolveGitMetadata(root, approvedRoots);
+    const gitResources = gitMetadata.commonDir
+      ? ['git-metadata:' + createHash('sha256').update(canonicalPathIdentity(gitMetadata.commonDir)).digest('hex')] : [];
     // Recheck after path I/O: duplicate concurrent starts must not both execute.
     if (this.receipts.find(scope, input.requestKey)) return this.start(input);
     if (this.closed || this.sessions.size >= 128) throw new Error("Command service is unavailable; no command was started.");
@@ -50,17 +57,25 @@ export class WebCommands {
     this.sessions.set(sessionId, session);
     const decoder = new StringDecoder("utf8");
     const completion = this.context.processSessions.mutate(root, async () => {
+      const currentMetadata = await resolveGitMetadata(root, approvedRoots);
+      if (session.abort.signal.aborted) {
+        Object.assign(session.snapshot, { exitCode: null, aborted: true });
+        return;
+      }
+      if (JSON.stringify(currentMetadata) !== JSON.stringify(gitMetadata)) throw new Error("Git metadata changed while acquiring the command claim; inspect the workspace before retrying.");
       const result = await this.run({ workspaceRoot: root, cwd, command: input.command,
         allowedDomains: this.context.config.webExecution?.allowedDomains ?? [],
         environment: this.context.config.webExecution?.environment ?? [],
         readRoots: this.context.config.webExecution?.readRoots ?? [],
         allowLocalBinding: this.context.config.webExecution?.allowLocalBinding ?? false,
         protectedPaths: [this.context.config.stateDir, this.context.config.configDir].filter((path): path is string => Boolean(path)),
+        gitMetadata: { readRoots: gitMetadata.readRoots, readFiles: gitMetadata.readFiles ?? [],
+          writeRoots: this.context.config.webExecution?.gitMetadataWrite ? gitMetadata.writeRoots : [] },
         timeoutMs: input.timeoutMs ?? 120000, signal: session.abort.signal,
         onOutputTruncated: () => { session.snapshot.outputTruncated = true; },
         maxOutputBytes: 200000, onData: (chunk) => { session.snapshot.output += decoder.write(chunk); } });
       Object.assign(session.snapshot, result);
-    }).catch((error: unknown) => {
+    }, gitResources).catch((error: unknown) => {
       session.snapshot.error = error instanceof Error ? error.message : String(error);
       if (error instanceof SandboxCleanupError) {
         session.snapshot.running = null;

@@ -424,13 +424,20 @@ export function spawnLocalAgentDaemon(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   const entrypoint = resolveDaemonEntrypoint();
-  const child = spawn(process.execPath, [...daemonExecArgv(process.execArgv), entrypoint], {
+  const child = spawn(process.execPath, daemonNodeArgs(entrypoint, process.execArgv), {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
     env: localAgentDaemonEnvironment(configDir, env),
   });
   child.unref();
+}
+
+/** Runtime-registered source loaders are not present in process.execArgv. */
+export function daemonNodeArgs(entrypoint: string, execArgv: readonly string[]): string[] {
+  const args = daemonExecArgv(execArgv);
+  if (entrypoint.endsWith(".ts")) args.push("--import", import.meta.resolve("tsx"));
+  return [...args, entrypoint];
 }
 
 export function localAgentDaemonEnvironment(

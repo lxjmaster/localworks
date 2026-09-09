@@ -253,6 +253,11 @@ export async function connectDesktopProjects(env: NodeJS.ProcessEnv = process.en
 
 export async function ensureDesktopProject(roots: string[], threadIds: string[] = [], env: NodeJS.ProcessEnv = process.env): Promise<ProjectReceipt> {
   if (!hasDesktop(env)) return { protocol: PROJECT_PROTOCOL, status: "not_applicable", roots, createdDirectories: [], uiStatus: "unverified" };
+  if (process.platform !== "win32" && !env.DEVSPACE_CODEX_DESKTOP_COMMAND) {
+    return { protocol: PROJECT_PROTOCOL, status: "not_applicable", roots, createdDirectories: [], uiStatus: "unverified",
+      code: "DESKTOP_ADAPTER_NOT_CONFIGURED",
+      action: "Desktop synchronization is optional and has no configured verified adapter on this platform. Workspace and agent operations are independent; no Desktop registration was attempted." };
+  }
   let client: ProjectControl | undefined;
   try {
     client = await connectDesktopProjects(env);

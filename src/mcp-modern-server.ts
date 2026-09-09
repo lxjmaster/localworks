@@ -66,10 +66,12 @@ export function createModernMcpServerAdapter(
 
 export function compileMcpRegistrationSurface(
   registerSurface: (target: McpRegistrationTarget) => void,
+  onToolRegistered?: (name: string) => void,
 ): (target: McpRegistrationTarget) => void {
   const registrations: RegistrationReplay[] = [];
   const recordingTarget: McpRegistrationTarget = {
     registerTool: ((...args: unknown[]) => {
+      if (typeof args[0] === "string") onToolRegistered?.(args[0]);
       registrations.push((target) => {
         (target.registerTool as (...callArgs: unknown[]) => unknown)(...args);
       });

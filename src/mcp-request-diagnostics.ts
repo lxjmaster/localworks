@@ -7,17 +7,18 @@ const tools = new Set(["open_workspace", "read", "workspace_context", "work_task
 const actions = new Set(["begin", "record", "finish", "get", "list", "snapshot", "history", "start", "continue", "observe", "claims", "usage", "cancelQueued", "capture", "search"]);
 const errorCodes = new Set(["WORK_STATE", "INVALID_TASK", "AGENT_CONFLICT", "EXECUTION_CONFLICT", "STALE_CONTEXT", "ACCESS_DENIED", "WORKSPACE_NOT_FOUND", "WORKSPACE_MISMATCH", "AGENT_NOT_FOUND"]);
 const object = (value: unknown): Record<string, any> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
-const known = (value: unknown, allowed: Set<string>) => typeof value === "string" && allowed.has(value) ? value : "other";
+const known = (value: unknown, allowed: ReadonlySet<string>) => typeof value === "string" && allowed.has(value) ? value : "other";
 const identity = (value: unknown, prefix: string) => typeof value === "string" && new RegExp(`^${prefix}_[a-f0-9]{6,64}$`).test(value) ? value : undefined;
+const commandSession = (value: unknown) => typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value) ? value : undefined;
 
 /** Metadata only. Never log request arguments, result text, headers, or raw errors.
  * This boundary also sees schema/auth failures that never enter a tool handler. */
-export function traceMcpRequest(req: Request, res: Response, requestId: string, record: RecordEvent): void {
+export function traceMcpRequest(req: Request, res: Response, requestId: string, record: RecordEvent, registeredTools: ReadonlySet<string> = tools): void {
   const body = object(req.body), params = object(body.params), args = object(params.arguments);
   const session = object(params._meta)["openai/session"];
   const context = { requestId, method: known(body.method, methods),
-    ...(body.method === "tools/call" ? { tool: known(params.name, tools), action: known(args.action, actions),
-      workspaceId: identity(args.workspaceId, "ws"), workRunId: identity(args.workRunId, "run"), agentId: identity(args.agentId, "agt") } : {}),
+    ...(body.method === "tools/call" ? { tool: known(params.name, registeredTools), action: known(args.action, actions),
+      workspaceId: identity(args.workspaceId, "ws"), workRunId: identity(args.workRunId, "run"), agentId: identity(args.agentId, "agt"), commandSessionId: commandSession(args.sessionId) } : {}),
     conversationHash: typeof session === "string" && session.length <= 1024
       ? createHash("sha256").update(JSON.stringify(session)).digest("hex").slice(0, 24) : undefined };
   const started = performance.now(), limit = 64 * 1024;
@@ -61,6 +62,12 @@ export function traceMcpRequest(req: Request, res: Response, requestId: string, 
             try {
               const value = object(JSON.parse(block.text));
               result.receiptPresent = result.receiptPresent === true || "completionReceipt" in value || "completionSnapshot" in value || "receipt" in value || "workRunId" in value;
+              if (commandSession(value.sessionId)) {
+                result.commandSessionId = value.sessionId;
+                if (typeof value.running === "boolean" || value.running === null) result.commandRunning = value.running;
+                if (Number.isInteger(value.exitCode)) result.commandExitCode = value.exitCode;
+                if (typeof value.timedOut === "boolean") result.commandTimedOut = value.timedOut;
+              }
               if (typeof value.code === "string") result.toolErrorCode = known(value.code, errorCodes);
               if (typeof value.message === "string" && payload.isError === true) result.errorFingerprint = createHash("sha256").update(value.message).digest("hex").slice(0, 16);
             } catch { /* Non-JSON text is never returned to logs. */ }

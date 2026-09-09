@@ -22,6 +22,7 @@ In the new instance's configuration:
       "allowedDomains": [],
       "environment": [],
       "readRoots": [],
+      "gitMetadataWrite": false,
       "allowLocalBinding": false
     }
   }
@@ -36,9 +37,28 @@ can expose anything printed by a command; environment selection is not redaction
 
 `readRoots` grants read access to existing toolchain directories. Paths are
 canonicalized and broad/protected overlaps rejected. On macOS the selected Xcode
-installation is discovered and made readable; the project `.git` directory is
-writable for ordinary Git operations. Git state outside the workspace (including
-linked worktree metadata) does not gain write access automatically.
+installation is discovered and made readable; actual toolchain executables precede
+Apple command shims in PATH. The project `.git` directory is writable for ordinary
+Git operations. Linked-worktree metadata is resolved from bounded `.git`, `commondir`
+and reciprocal `gitdir` pointers inside owner-approved roots. Verified directories
+are readable; `gitMetadataWrite: true` additionally permits shared metadata writes.
+This can affect shared refs and objects, not just the selected worktree. Web commands
+use a common-directory resource claim to serialize these operations. External
+editors, terminals and independently configured providers still require their own
+coordination and Git's native locks.
+
+Nested workspace discovery stays inside approved roots and grants only the exact
+parent `.git` pointer if needed, not the parent source directory. Git's automatic
+parent traversal can still require directory access outside a nested workspace.
+`open_workspace` therefore returns `gitContext` with the checkout root and relative
+working directory: explicitly open that checkout as a workspace, within the user's
+authorized task, and pass the subdirectory as `workingDirectory` for repository
+operations. The server never silently broadens a nested file workspace or rewrites
+Git environment variables to pretend that it is the repository root. Source outside
+the opened workspace remains inaccessible. Unrecognized/separate-git-dir layouts or
+unverifiable backlinks fail explicitly. Metadata descendants do not add further
+grants, and the OS sandbox enforces symlink containment; discovery does not scan
+the whole object database for every command.
 Git uses the project configuration, not the owner's private home configuration;
 configure the intended author identity in the project before committing. The service
 does not invent an author identity or export signing credentials.
@@ -61,6 +81,14 @@ the previous mode and refreshing again; do not describe the legacy modes as
 sandboxed. No state deletion or tunnel change is needed for a tool-mode rollback.
 
 ## Contracts
+
+For managed worktrees, choose `workspaces.worktreeRoot` outside protected service
+or credential directories, for example a dedicated folder inside Projects. The
+configured worktree root is considered owner-approved only for registry-managed
+worktree workspaces; it does not authorize arbitrary checkout paths. Legacy
+locations beneath `.devspace` or service state remain protected, so new web-mode
+worktrees should use the dedicated project location. Existing worktrees are not
+moved or rebuilt automatically.
 
 | Tools | Behavior |
 | --- | --- |
@@ -132,6 +160,20 @@ A cleanup failure stops further managed execution and causes shutdown to report
 failure. It is not treated as a successful command or clean teardown. The runner
 installation cannot itself be a command workspace; keep the installed service
 separate from source checkouts you want to develop through it.
+
+Each command receives private temporary/cache directories which are removed after
+completion, failure or cancellation. The runner does not grant the whole system
+temporary directory. The owner timezone is passed explicitly and its timezone
+data made readable, so `date` uses the local offset rather than silently falling
+back to UTC. Always format `%z`; do not append a literal timezone to UTC output.
+
+Request diagnostics use the actual registered tool catalog, so new tool names are
+not collapsed to `other`. Command session IDs and exit state can be correlated
+without logging command text, credentials or output. Desktop synchronization remains
+optional: on platforms without a configured verified Desktop adapter, registration
+reports `DESKTOP_ADAPTER_NOT_CONFIGURED`/`not_applicable`, not a workspace failure.
+This does not claim a Desktop integration was performed. Source-based daemon
+startup explicitly installs its loader; compiled releases do not need it.
 
 Require the macOS/Linux sandbox integration explicitly:
 

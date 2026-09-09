@@ -258,9 +258,9 @@ export class ProcessSessionManager {
     if (options.stateDir) this.executionCoordinator = new ExecutionCoordinator(options.stateDir);
   }
 
-  async mutate<T>(workspaceRoot: string, operation: () => Promise<T>): Promise<T> {
+  async mutate<T>(workspaceRoot: string, operation: () => Promise<T>, resources?: string[]): Promise<T> {
     if (this.shuttingDown) throw new Error("Execution manager is shutting down.");
-    const claim = this.executionCoordinator?.acquire({ workspaceRoot, kind: "mutation" });
+    const claim = this.executionCoordinator?.acquire({ workspaceRoot, kind: "mutation", resources });
     if (claim) this.claims.add(claim);
     try { return await operation(); } finally { this.releaseClaim(claim); }
   }

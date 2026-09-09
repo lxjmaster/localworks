@@ -9,6 +9,43 @@ import { createMcpHandler } from "@modelcontextprotocol/server";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createModernMcpServerAdapter } from "./mcp-modern-server.js";
 import { traceMcpRequest } from "./mcp-request-diagnostics.js";
+import { compileMcpRegistrationSurface } from "./mcp-modern-server.js";
+
+test("registered web tool names and command receipts are logged without untrusted names or output", async (t) => {
+  const names = new Set<string>();
+  const rows: Record<string, any>[] = [];
+  const register = compileMcpRegistrationSurface(target => {
+    target.registerTool("command_status", { inputSchema: { sessionId: z.string() } }, async ({ sessionId }) => ({
+      content: [{ type: "text", text: JSON.stringify({ sessionId, running: false, exitCode: 128, timedOut: false, output: "secret-output" }) }],
+    }));
+  }, name => names.add(name));
+  const handler = createMcpHandler(() => {
+    const adapter = createModernMcpServerAdapter({ name: "fixture", version: "1" });
+    register(adapter.registrationTarget); return adapter.server;
+  }, { legacy: "stateless" });
+  const app = express(); app.use(express.json());
+  app.all("/mcp", (req,res) => {
+    traceMcpRequest(req,res,"fixture",(event,fields) => rows.push({ event,...fields }),names);
+    return toNodeHandler(handler)(req,res,req.body);
+  });
+  const http = app.listen(0,"127.0.0.1"); await once(http,"listening");
+  t.after(async () => { await handler.close(); await new Promise<void>(resolve => http.close(() => resolve())); });
+  const sessionId="12345678-1234-1234-1234-123456789abc";
+  for (const name of ["command_status", "secret-tool-name"]) {
+    const response = await fetch(`http://127.0.0.1:${(http.address() as AddressInfo).port}/mcp`, {
+      method:"POST", headers:{"content-type":"application/json","mcp-protocol-version":"2026-07-28","mcp-method":"tools/call","mcp-name":name},
+      body:JSON.stringify({jsonrpc:"2.0",id:1,method:"tools/call",params:{name,arguments:{sessionId},_meta:{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}),
+    });
+    await response.text();
+    assert.equal(rows.at(-1)!.tool,name==="command_status"?name:"other");
+    if(name==="command_status") {
+      assert.equal(rows.at(-1)!.commandSessionId,sessionId);
+      assert.equal(rows.at(-1)!.commandExitCode,128);
+      assert.equal(rows.at(-1)!.commandRunning,false);
+    }
+  }
+  assert(!JSON.stringify(rows).includes("secret-"));
+});
 
 test("real modern HTTP MCP diagnostics separate schema/tool errors from successful HTTP and omit secrets", async (t) => {
   const rows: Record<string, any>[] = [];

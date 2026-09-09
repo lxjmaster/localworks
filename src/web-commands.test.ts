@@ -12,6 +12,11 @@ import { CommandReceipts } from "./command-receipts.js";
 import { createHash } from "node:crypto";
 import { openDatabase } from "./db/client.js";
 
+async function until(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; !predicate() && attempt < 1000; attempt++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert(predicate(), "Expected asynchronous command state");
+}
+
 test("web commands deduplicate starts, retain results, scope queries and drain on shutdown", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "localworks-command-contract-"));
   const processes = new ProcessSessionManager();
@@ -38,6 +43,7 @@ test("web commands deduplicate starts, retain results, scope queries and drain o
   const input = { workspaceId: "one", requestKey: "same", command: "any command" };
   const [a, b] = await Promise.all([commands.start(input), commands.start(input)]);
   assert.equal(a.sessionId, b.sessionId);
+  await until(() => invocations === 1);
   assert.equal(invocations, 1);
   const utf8 = Buffer.from("中文🙂");
   for (const byte of utf8) emit(Buffer.from([byte]));
@@ -55,6 +61,7 @@ test("web commands deduplicate starts, retain results, scope queries and drain o
   assert.deepEqual(commands.status("one", a.sessionId), completed);
   assert.deepEqual(await commands.start(input), completed);
   await commands.start({ ...input, requestKey: "second" });
+  await until(() => invocations === 2);
   processes.shutdown();
   await processes.waitForBackground();
   assert.equal(aborted, true);
@@ -161,9 +168,11 @@ test("active capacity is released on completion and shutdown races do not start 
     finishes.push(finish); options.signal?.addEventListener("abort", finish, { once: true });
   }));
   for (let i = 0; i < 128; i++) await commands.start({ workspaceId: "ws", requestKey: String(i), command: "fixture" });
+  await until(() => finishes.length === 128);
   await assert.rejects(commands.start({ workspaceId: "ws", requestKey: "full", command: "fixture" }), /Concurrent/);
   finishes[0](); await new Promise(resolve => setImmediate(resolve));
   await commands.start({ workspaceId: "ws", requestKey: "full", command: "fixture" });
+  await until(() => finishes.length === 129);
   assert.equal(finishes.length, 129);
   const racing = commands.start({ workspaceId: "ws", requestKey: "race", command: "fixture" });
   p.shutdown();

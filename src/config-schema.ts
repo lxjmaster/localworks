@@ -3,7 +3,7 @@ import { subagentsConfigSchema } from "./local-agent-config.js";
 
 export const DEVSPACE_CONFIG_VERSION = 1 as const;
 export const DEVSPACE_CONFIG_SCHEMA_URL =
-  "https://raw.githubusercontent.com/Waishnav/devspace/main/schema/v1/devspace.schema.json";
+  "https://raw.githubusercontent.com/lxjmaster/localworks/main/schema/v1/devspace.schema.json";
 
 const serverConfigSchema = z.object({
   host: z.string().trim().min(1).default("127.0.0.1"),
@@ -28,6 +28,7 @@ const toolsConfigSchema = z.object({
     allowedDomains: z.array(z.string().trim().min(1)).default([]),
     environment: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default([]),
     readRoots: z.array(z.string().trim().min(1)).default([]).describe("Owner-selected existing toolchain directories to read; broad/protected overlaps are rejected."),
+    gitMetadataWrite: z.boolean().default(false).describe("Allow writes to validated linked-worktree Git metadata inside approved roots. Shared repository refs/objects may be affected; web commands coordinate on the common Git directory."),
     allowLocalBinding: z.boolean().default(false).describe("macOS only: permits inbound binding on all interfaces and loopback connections, not loopback-only enforcement. Default false."),
   }).strict().prefault({}),
 }).strict().prefault({});

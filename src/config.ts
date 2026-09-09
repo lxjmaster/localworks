@@ -17,7 +17,7 @@ export interface ServerConfig {
   allowedHosts: string[];
   publicBaseUrl: string;
   toolMode: ToolMode;
-  webExecution?: { allowedDomains: string[]; environment: string[]; readRoots?: string[]; allowLocalBinding?: boolean };
+  webExecution?: { allowedDomains: string[]; environment: string[]; readRoots?: string[]; allowLocalBinding?: boolean; gitMetadataWrite?: boolean };
   uiEnabled: boolean;
   stateDir: string;
   worktreeRoot: string;

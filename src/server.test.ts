@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rm, writeFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -128,6 +128,18 @@ test("web MCP completes versioned edits and rejects writes through query contrac
   assert.equal(tools.find(tool => tool.name === "agent_execute")?.annotations?.readOnlyHint, false);
   assert(!tools.some(tool => tool.name === "exec_command" || tool.name === "bash"));
   assert(!(await call("show_changes", {})).isError);
+});
+
+test("nested web workspace advertises explicit Git context without broadening file scope", async t => {
+  const context=await fixture(t,{toolMode:"web",git:true,uiEnabled:false});
+  const nested=join(context.project,"nested");await mkdir(nested);
+  const opened=structuredContent(await callOpen(context.client,nested,"nested-web"));
+  assert.equal(opened.root,nested);
+  const gitContext=opened.gitContext as {checkoutRoot:string;workingDirectory:string};
+  assert.equal(gitContext.checkoutRoot,await realpath(context.project));
+  assert.equal(gitContext.workingDirectory,"nested");
+  const outside=await context.client.callTool({name:"read_file",arguments:{workspaceId:opened.workspaceId,path:"../README.md"}});
+  assert.equal(outside.isError,true);
 });
 
 test("web MCP runs a real sandboxed project check and retains its result", {

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { relative } from "node:path";
+import { resolveGitMetadata } from "./git-metadata.js";
 import { ensureDesktopProject } from "./codex-projects.js";
 import { WorkLedger as ProjectWorkLedger } from "./work-ledger.js";
 import { readFileSync } from "node:fs";
@@ -418,6 +420,7 @@ function registerMcpSurface(
       },
       outputSchema: {
         workspaceId: z.string(),
+        gitContext: z.object({ checkoutRoot: z.string(), workingDirectory: z.string(), instruction: z.string() }).optional(),
         projectRegistration: z.unknown().optional(),
         root: z.string(),
         mode: z.enum(["checkout", "worktree"]),
@@ -463,6 +466,17 @@ function registerMcpSurface(
         { conversationScopeId: conversationScopeIdFromRequestMeta(_meta) },
       );
       const projectLedger = new ProjectWorkLedger(config.stateDir);
+      let gitContext: { checkoutRoot: string; workingDirectory: string; instruction: string } | undefined;
+      if (config.toolMode === "web") {
+        try {
+          const metadata = await resolveGitMetadata(workspace.root, [...config.allowedRoots, ...(workspace.mode === "worktree" ? [config.worktreeRoot] : [])]);
+          if (metadata.checkoutRoot) gitContext = {
+            checkoutRoot: metadata.checkoutRoot,
+            workingDirectory: relative(metadata.checkoutRoot, await realpath(workspace.root)),
+            instruction: "For Git repository operations, explicitly open checkoutRoot as a workspace and use this workingDirectory. The current workspace stays restricted to its selected directory; parent source access is not granted. Follow the user's scope limits before opening the wider checkout.",
+          };
+        } catch { /* File-only work remains possible; command admission reports invalid Git linkage. */ }
+      }
       let devspaceProjectId: string;
       try { devspaceProjectId = projectLedger.project(workspace.root).id; } finally { projectLedger.close(); }
       const projectRegistration = { devspaceProjectId, ...await registerProject([workspace.root]) };
@@ -526,6 +540,7 @@ function registerMcpSurface(
                 : `Opened workspace ${workspace.id}.`,
             `Root: ${workspace.root}`,
             `Mode: ${workspace.mode}`,
+            gitContext ? `Git context: ${JSON.stringify(gitContext)}` : undefined,
             `Project registration: ${JSON.stringify(projectRegistration)}`,
             loadedAgentsFiles.length > 0
               ? `Loaded project instructions: ${loadedAgentsFiles.map((file) => file.path).join(", ")}`
@@ -585,6 +600,7 @@ function registerMcpSurface(
         },
         structuredContent: {
           workspaceId: workspace.id,
+          ...(gitContext ? { gitContext } : {}),
           projectRegistration,
           root: workspace.root,
           mode: workspace.mode,
@@ -830,6 +846,7 @@ export function createServer(
     getLocalAgentProviderAvailabilitySnapshot(),
   );
   const modernToolSurface = getToolSurface(config.toolMode);
+  const registeredToolNames = new Set<string>();
   const bindModernMcpSurface = compileMcpRegistrationSurface((target) => {
     registerMcpSurface(
       target,
@@ -842,7 +859,7 @@ export function createServer(
       toolActivities.track,
       options.registerProject,
     );
-  });
+  }, name => registeredToolNames.add(name));
   const logMcpHandlerError = (error: Error) => logEvent(
     config.logging,
     "error",
@@ -929,7 +946,7 @@ export function createServer(
     const requestId = res.locals.requestId as string | undefined;
     if (config.logging.requests) traceMcpRequest(req, res, requestId ?? randomUUID(),
       (event, fields, level = "info") => options.diagnostics
-        ? options.diagnostics.record(event, fields, level) : logEvent(config.logging, level, event, fields));
+        ? options.diagnostics.record(event, fields, level) : logEvent(config.logging, level, event, fields), registeredToolNames);
 
     await new Promise<void>((resolve, reject) => {
       bearerAuth(req, res, (error?: unknown) => {
