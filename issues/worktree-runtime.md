@@ -23,8 +23,22 @@ all user's repository contents and existing remote routes/credentials.
   integration/compatibility cases pass. Build and typecheck pass. Real API worktree
   read-only check returns exit 0, correct +0800 offset and unchanged index hash.
   Independent review closed; cleanup-error precedence finding fixed.
-- [ ] Review, commit/push and deploy isolated compiled release with rollback.
-- [ ] Verify public MCP against the existing API worktree without modifying its
+- [✅] Review, commit/push and deploy isolated compiled release with rollback
+  (application commit 78e55ae). Existing OAuth credentials and state preserved.
+- [✅] Verify public MCP against the existing API worktree without modifying its
   source, Git index/refs, branches or deployment resources; clean test artifacts.
+  Public read-only command returned exit 0 at 2026-09-09T22:31:26+0800,
+  clean Git status and the expected HEAD; index SHA-256 unchanged. No cache denial.
+  Local agent listing/cold startup also passed without inference. Verification
+  clients/tokens were removed; no active execution claims remain. Both launch
+  agents are running. Deployment config enables validated shared metadata writes
+  and places new managed worktrees under Projects, without moving existing ones.
+
+Remaining documented boundaries (not claims of full platform support): explicit
+Apple shim paths may still emit cache warnings; nested Git requires an explicitly
+opened checkout-root workspace; Desktop synchronization needs a verified adapter.
+Next steps if these additional capabilities are required: validate the specific
+shim/adapter on disposable fixtures before changing its permissions or protocol.
+Owner: unassigned; priority P3. These do not block the verified API-worktree path.
 
 Actual ChatGPT platform safety behavior cannot be guaranteed by these local fixes.

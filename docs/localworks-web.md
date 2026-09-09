@@ -39,7 +39,10 @@ can expose anything printed by a command; environment selection is not redaction
 canonicalized and broad/protected overlaps rejected. On macOS the selected Xcode
 installation is discovered and made readable; actual toolchain executables precede
 Apple command shims in PATH. The project `.git` directory is writable for ordinary
-Git operations. Linked-worktree metadata is resolved from bounded `.git`, `commondir`
+Git operations. Explicitly hardcoded Apple shim paths such as `/usr/bin/git` may
+still emit cache permission warnings; the runner does not grant global temporary
+directory access to silence them. Normal `git` uses the selected real toolchain.
+Linked-worktree metadata is resolved from bounded `.git`, `commondir`
 and reciprocal `gitdir` pointers inside owner-approved roots. Verified directories
 are readable; `gitMetadataWrite: true` additionally permits shared metadata writes.
 This can affect shared refs and objects, not just the selected worktree. Web commands
