@@ -228,6 +228,28 @@ export class ProcessSessionManager {
   readonly executionCoordinator?: ExecutionCoordinator;
   private readonly claims = new Set<ExecutionClaim>();
   private shuttingDown = false;
+  private readonly shutdownCallbacks = new Set<() => void>();
+  private readonly backgroundTasks = new Set<Promise<unknown>>();
+  private readonly backgroundFailures: Error[] = [];
+
+  recordBackgroundFailure(error: Error): void {
+    this.backgroundFailures.push(error);
+    this.shutdown();
+  }
+
+  trackBackground(task: Promise<unknown>): void {
+    this.backgroundTasks.add(task);
+    void task.finally(() => this.backgroundTasks.delete(task)).catch(() => {});
+  }
+
+  async waitForBackground(): Promise<void> {
+    await Promise.allSettled([...this.backgroundTasks]);
+    if (this.backgroundFailures.length) throw new AggregateError(this.backgroundFailures, "Background command cleanup failed; inspect the execution diagnostics.");
+  }
+
+  onShutdown(callback: () => void): void {
+    this.shutdownCallbacks.add(callback);
+  }
 
   constructor(options: ProcessSessionManagerOptions = {}) {
     this.workStateDir = options.stateDir;
@@ -332,6 +354,8 @@ export class ProcessSessionManager {
 
   shutdown(): void {
     this.shuttingDown = true;
+    for (const callback of this.shutdownCallbacks) callback();
+    this.shutdownCallbacks.clear();
     for (const session of this.sessions.values()) {
       if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
       if (session.running) session.process?.kill("SIGTERM");

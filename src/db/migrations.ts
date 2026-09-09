@@ -156,6 +156,22 @@ migrations.push({ version: 12, name: "bounded-agent-progress", up(sqlite) {
   addColumnIfMissing(sqlite, "local_agent_sessions", "progress", "text");
 } });
 
+migrations.push({ version: 13, name: "web-command-receipts", up(sqlite) {
+  sqlite.exec(`create table web_command_receipts (
+    sequence integer primary key autoincrement,
+    session_id text not null unique,
+    scope text not null,
+    request_key_hash text not null,
+    fingerprint text not null,
+    snapshot text not null,
+    output text,
+    completed integer not null default 0,
+    completed_at integer,
+    unique(scope, request_key_hash)
+  );
+  create index web_command_receipts_completed on web_command_receipts(completed, completed_at, sequence);`);
+} });
+
 function migrateWorkspaceState(sqlite: Database.Database): void {
   sqlite.exec(`
     create table if not exists workspace_sessions (

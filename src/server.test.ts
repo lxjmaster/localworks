@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { once } from "node:events";
-import type { AddressInfo } from "node:net";
+import { createServer as createNetServer, type AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig, type ServerConfig, type ToolMode } from "./config.js";
@@ -62,6 +62,10 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
     expected: string[];
   }> = [
     {
+      mode: "web",
+      expected: ["open_workspace", "read", "workspace_context", "work_query", "work_update", "agent_query", "agent_execute", "read_file", "create_file", "create_directory", "edit_file", "replace_file", "move_file", "delete_file", "command_start", "command_status", "command_stop", "show_changes"],
+    },
+    {
       mode: "claude",
       expected: ["open_workspace", "read", "workspace_context", "work_task", "agent_task", "write", "edit", "bash", "show_changes"],
     },
@@ -97,6 +101,102 @@ test("UI metadata is limited to workspace and aggregate review", async (t) => {
       assert.deepEqual(toolsWithUi, uiEnabled ? ["open_workspace", "show_changes"] : []);
     });
   }
+});
+
+test("web MCP completes versioned edits and rejects writes through query contracts", async (t) => {
+  const context = await fixture(t, { toolMode: "web", git: true, uiEnabled: false });
+  const opened = structuredContent(await callOpen(context.client, context.project, "web-contract"));
+  const workspaceId = opened.workspaceId;
+  const call = (name: string, args: Record<string, unknown>) => context.client.callTool({ name, arguments: { workspaceId, ...args } });
+  const created = await call("create_file", { path: "web.txt", content: "before\n" });
+  assert(!created.isError);
+  const first = structuredContent(await call("read_file", { path: "web.txt" }));
+  assert.equal(first.content, "before\n");
+  const updated = await call("edit_file", { path: "web.txt", expectedSha256: first.sha256,
+    edits: [{ oldText: "before", newText: "after" }] });
+  assert(!updated.isError);
+  const stale = await call("replace_file", { path: "web.txt", expectedSha256: first.sha256, content: "lost update" });
+  assert.equal(stale.isError, true);
+  assert.equal(structuredContent(await call("read_file", { path: "web.txt" })).content, "after\n");
+  assert.equal((await call("read_file", { path: "../outside" })).isError, true);
+  for (const [name, action] of [["work_query", "begin"], ["agent_query", "start"]]) {
+    const rejected = await call(name, { action });
+    assert.equal(rejected.isError, true);
+  }
+  const tools = (await context.client.listTools()).tools;
+  assert.equal(tools.find(tool => tool.name === "agent_query")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.find(tool => tool.name === "agent_execute")?.annotations?.readOnlyHint, false);
+  assert(!tools.some(tool => tool.name === "exec_command" || tool.name === "bash"));
+  assert(!(await call("show_changes", {})).isError);
+});
+
+test("web MCP runs a real sandboxed project check and retains its result", {
+  skip: process.env.DEVSPACE_REQUIRE_SANDBOX_COMMAND !== "1" ? "Requires real sandbox integration lane" : false,
+  timeout: 30000,
+}, async (t) => {
+  const context = await fixture(t, { toolMode: "web", uiEnabled: false });
+  const { workspaceId } = structuredContent(await callOpen(context.client, context.project, "web-execution"));
+  const call = (name: string, args: Record<string, unknown>) => context.client.callTool({ name, arguments: { workspaceId, ...args } });
+  const textResult = (result: Awaited<ReturnType<typeof call>>) => {
+    assert(!result.isError, JSON.stringify(result));
+    const blocks = result.content as Array<{ type: string; text: string }>;
+    return JSON.parse(blocks[0].text);
+  };
+  const created = await call("create_file", { path: "check.cjs", content: "const fs = require('node:fs'); process.stdout.write('check passed\\n' + 'x'.repeat(250000), () => fs.writeFileSync('checked.txt', 'verified'));" });
+  assert(!created.isError);
+  const request = { requestKey: "project-check", command: "git init && git add check.cjs && git -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -m fixture && git status --porcelain && node check.cjs", timeoutMs: 15000 };
+  const started = textResult(await call("command_start", request));
+  assert.equal(textResult(await call("command_start", request)).sessionId, started.sessionId);
+  let result = started;
+  for (let attempt = 0; result.running && attempt < 600; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+    result = textResult(await call("command_status", { sessionId: started.sessionId }));
+  }
+  assert.equal(result.running, false, JSON.stringify(result));
+  assert.equal(result.exitCode, 0, JSON.stringify(result));
+  assert.equal(result.error, undefined);
+  assert.match(result.output, /check passed/);
+  assert.equal(result.outputTruncated, true);
+  assert.equal(structuredContent(await call("read_file", { path: "checked.txt" })).content, "verified");
+  assert.deepEqual(textResult(await call("command_status", { sessionId: started.sessionId })), result);
+});
+
+test("web MCP owner listening config starts an HTTP server and stop releases its port", {
+  skip: process.env.DEVSPACE_REQUIRE_SANDBOX_COMMAND !== "1" || process.platform !== "darwin" ? "Requires macOS sandbox integration" : false,
+  timeout: 30000,
+}, async (t) => {
+  const context = await fixture(t, { toolMode: "web", uiEnabled: false,
+    webExecution: { allowedDomains: [], environment: [], allowLocalBinding: true } });
+  const { workspaceId } = structuredContent(await callOpen(context.client, context.project, "web-listening"));
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const result = await context.client.callTool({ name, arguments: { workspaceId, ...args } });
+    assert(!result.isError, JSON.stringify(result));
+    return JSON.parse((result.content as Array<{ text: string }>)[0].text);
+  };
+  const tools = (await context.client.listTools()).tools;
+  const definition = tools.find(tool => tool.name === "command_start")!;
+  assert(!definition.inputSchema.properties?.allowLocalBinding, "The model cannot grant listening permissions");
+  await call("create_file", { path: "serve.cjs", content: "require('node:http').createServer((q,r)=>r.end('ok')).listen(0,'127.0.0.1',function(){console.log('port='+this.address().port)})" });
+  const started = await call("command_start", { requestKey: "serve", command: "node serve.cjs", timeoutMs: 15000 });
+  let result = started;
+  for (let i = 0; i < 600 && result.running && !/port=\d+/.test(result.output); i++) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+    result = await call("command_status", { sessionId: started.sessionId });
+  }
+  const match = /port=(\d+)/.exec(result.output);
+  assert(match, JSON.stringify(result));
+  const port = Number(match[1]);
+  assert.equal(await (await fetch(`http://127.0.0.1:${port}`, { signal: AbortSignal.timeout(2000) })).text(), "ok");
+  await call("command_stop", { sessionId: started.sessionId });
+  for (let i = 0; i < 200 && result.running; i++) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+    result = await call("command_status", { sessionId: started.sessionId });
+  }
+  assert.equal(result.running, false, JSON.stringify(result));
+  assert.equal(result.aborted, true);
+  const probe = createNetServer();
+  await new Promise<void>((resolve, reject) => { probe.once("error", reject); probe.listen(port, "127.0.0.1", resolve); });
+  await new Promise<void>((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
 });
 
 test("MCP advertises explicit directory creation and preserves it through the real tool handler", async (t) => {
@@ -602,6 +702,7 @@ async function fixture(
     localAgentProviders?: LocalAgentProviderAvailability[] | (() => LocalAgentProviderAvailability[]);
     subagents?: SubagentsConfig;
     toolMode?: ToolMode;
+    webExecution?: ServerConfig["webExecution"];
     uiEnabled?: boolean;
   } = {},
 ): Promise<ServerFixture> {
@@ -645,6 +746,7 @@ async function fixture(
   const modeConfig: ServerConfig = {
     ...loadedConfig,
     toolMode: options.toolMode ?? loadedConfig.toolMode,
+    webExecution: options.webExecution ?? loadedConfig.webExecution,
     uiEnabled: options.uiEnabled ?? loadedConfig.uiEnabled,
   };
   const config: ServerConfig = options.localAgentProviders
@@ -669,11 +771,12 @@ async function fixture(
   );
   const store = new SqliteWorkspaceStore(stateDir);
   const workspaces = new WorkspaceRegistry(config, store);
+  const processSessions = new ProcessSessionManager();
   const server = createMcpServer(
     config,
     workspaces,
     createReviewCheckpointManager(),
-    new ProcessSessionManager(),
+    processSessions,
     resolveLocalAgentProviders,
     [],
     undefined,
@@ -692,6 +795,8 @@ async function fixture(
     closed = true;
     await client.close();
     await server.close();
+    processSessions.shutdown();
+    await processSessions.waitForBackground();
     store.close();
   };
 

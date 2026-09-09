@@ -68,7 +68,7 @@ export function registerWorkspaceContextTool({ server, config, workspaces, proce
       return { providerInvoked: false, contextId: createHash("sha256").update(JSON.stringify(entries.map(({ path, sha256 }) => ({ path, sha256 })))).digest("hex"),
         refs, entries, bytesRead,
         consistency: "Selected file versions under a cooperative read claim. External edits require revalidation. This is not a whole-repository snapshot.",
-        delegation: "Use the host to summarize relevant facts; pass summary and refs as agent_task.context only when a worker is actually needed." };
+        delegation: `Use the host to summarize relevant facts; pass context: { summary, files: refs } to ${config?.toolMode === "web" ? "agent_execute" : "agent_task"} with action: "start" only when a worker is actually needed.` };
     });
     const value = input.workRunId ? await trackedWork(config.stateDir, input.workRunId, { root: workspace.root, workspaceId: workspace.id }, "workspace_context", capture) : await capture();
     return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };

@@ -2,8 +2,10 @@ import type { ToolMode } from "../config.js";
 import { codexInstructions, registerCodexTools } from "./codex.js";
 import { claudeInstructions, registerClaudeTools } from "./claude.js";
 import { type ToolSurface } from "./types.js";
+import { registerWebTools, webInstructions } from "./web.js";
 
 const TOOL_SURFACES: Record<ToolMode, ToolSurface> = {
+  web: { register: registerWebTools, instructions: webInstructions },
   claude: {
     register: registerClaudeTools,
     instructions: claudeInstructions,

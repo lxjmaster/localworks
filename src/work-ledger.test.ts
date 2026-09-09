@@ -51,6 +51,15 @@ test("explicit project names preserve identity and survive ordinary registration
   assert.equal(f.ledger.project(f.project).name, "LanggraphAgent");
 });
 
+test("project lookup does not create a project record", (t) => {
+  const f = fixture(t);
+  const before = f.ledger.projects();
+  assert.equal(f.ledger.findProject(f.project), undefined);
+  assert.deepEqual(f.ledger.projects(), before);
+  const created = f.ledger.project(f.project);
+  assert.deepEqual(f.ledger.findProject(f.project), created);
+});
+
 test("a host-only run has an explicit zero receipt and idempotent final acceptance", (t) => {
   const f = fixture(t); const run = f.begin("host");
   assert.equal(f.begin("host").id, run.id);

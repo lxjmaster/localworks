@@ -1,4 +1,6 @@
-# TaskQuay
+# LocalWorks
+
+LocalWorks 基于 [wrfgup/taskquay](https://github.com/wrfgup/taskquay) 独立开发，保留上游 MIT 许可证及贡献历史。新增的 `web` 工具模式保留文件编辑、通用命令和子代理能力，改进工具职责与执行边界。配置、迁移和验收见 [网页 MCP 工作流](docs/localworks-web.md)。下方保留来源项目的功能介绍；CLI 与配置名称继续兼容 `devspace`。
 
 **让懂你需求的网页 GPT，真正带着本地 Coding Agent 干活。**
 

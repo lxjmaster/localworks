@@ -97,8 +97,46 @@
           "type": "string",
           "enum": [
             "claude",
-            "codex"
+            "codex",
+            "web"
           ]
+        },
+        "webExecution": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "allowedDomains": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "environment": {
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              }
+            },
+            "readRoots": {
+              "default": [],
+              "description": "Owner-selected existing toolchain directories to read; broad/protected overlaps are rejected.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "allowLocalBinding": {
+              "default": false,
+              "description": "macOS only: permits inbound binding on all interfaces and loopback connections, not loopback-only enforcement. Default false.",
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

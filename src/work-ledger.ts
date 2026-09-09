@@ -96,6 +96,10 @@ export class WorkLedger {
     return row;
   }
   projects(): ProjectRow[] { return this.db.prepare("select * from console_projects order by name, id").all() as ProjectRow[]; }
+  findProject(root: string): ProjectRow | undefined {
+    const projectId = `prj_${digest(canonicalExecutionRoot(root)).slice(0, 24)}`;
+    return this.db.prepare("select * from console_projects where id=?").get(projectId) as ProjectRow | undefined;
+  }
 
   begin(input: { root: string; workspaceId?: string; workItemId: string; runKey: string; title: string; origin: WorkOrigin }): WorkRunRow {
     for (const key of [input.workItemId, input.runKey]) if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/.test(key)) throw new Error("Invalid work identity.");

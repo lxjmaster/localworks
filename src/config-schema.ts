@@ -23,7 +23,13 @@ const storageConfigSchema = z.object({
 }).strict().prefault({});
 
 const toolsConfigSchema = z.object({
-  mode: z.enum(["claude", "codex"]).default("codex"),
+  mode: z.enum(["claude", "codex", "web"]).default("codex"),
+  webExecution: z.object({
+    allowedDomains: z.array(z.string().trim().min(1)).default([]),
+    environment: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default([]),
+    readRoots: z.array(z.string().trim().min(1)).default([]).describe("Owner-selected existing toolchain directories to read; broad/protected overlaps are rejected."),
+    allowLocalBinding: z.boolean().default(false).describe("macOS only: permits inbound binding on all interfaces and loopback connections, not loopback-only enforcement. Default false."),
+  }).strict().prefault({}),
 }).strict().prefault({});
 
 const uiConfigSchema = z.object({

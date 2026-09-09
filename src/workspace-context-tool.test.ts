@@ -13,13 +13,13 @@ import { ExecutionCoordinator } from "./execution-coordinator.js";
 import { parseLocalAgentRunArgs, parseLocalAgentContinueArgs } from "./local-agent-targets.js";
 import { decodeLocalAgentDaemonRequest } from "./local-agent-daemon-protocol.js";
 
-test("host can capture, search and version exact source through MCP without any provider", async (t) => {
+for (const toolMode of ["web", "full"] as const) test(`${toolMode}: host captures context with mode-aware delegation guidance`, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "devspace-host-context-"));
   const project = join(root, "project"); mkdirSync(join(project, ".git"), { recursive: true });
   writeFileSync(join(project, "source.ts"), "// 主控直接读取\nexport const value = 1;\n");
   const processSessions = new ProcessSessionManager({ stateDir: join(root, "state") });
   const server = new McpServer({ name: "fixture", version: "1" });
-  registerWorkspaceContextTool({ server, processSessions,
+  registerWorkspaceContextTool({ server, processSessions, config: { toolMode },
     workspaces: { getWorkspace: () => ({ id: "ws", root: project }), resolvePath: (_workspace: unknown, path: string) => resolve(project, path),
       resolveReadPath: (_workspace: unknown, path: string) => ({ absolutePath: resolve(project, path), readRoots: [project] }) },
   } as unknown as ToolRegistrationContext);
@@ -36,6 +36,9 @@ test("host can capture, search and version exact source through MCP without any 
   const captured = await call({ action: "capture", files: [{ path: "source.ts", maxLines: 1 }] });
   assert(!captured.error); assert.equal(captured.value.entries[0].lines[0].text, "// 主控直接读取");
   assert.equal(captured.value.entries[0].nextLine, 2); assert.match(captured.value.refs[0].sha256, /^[0-9a-f]{64}$/);
+  assert.match(captured.value.delegation, new RegExp(toolMode === "web" ? "agent_execute" : "agent_task"));
+  assert.doesNotMatch(captured.value.delegation, new RegExp(toolMode === "web" ? "agent_task" : "agent_execute"));
+  assert.match(captured.value.delegation, /context: \{ summary, files: refs \}/);
   const searched = await call({ action: "search", query: "value", files: [{ path: "source.ts" }] });
   assert.equal(searched.value.entries[0].lines[0].line, 2); assert.equal(searched.value.refs[0].sha256, captured.value.refs[0].sha256);
   writeFileSync(join(project, "source.ts"), "changed\n");

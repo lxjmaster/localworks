@@ -43,6 +43,7 @@ import {
 } from "./mcp-modern-server.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { registerWorkspaceContextTool } from "./tool-surfaces/workspace-context.js";
+import { webControlTarget } from "./tool-surfaces/web.js";
 import { registerWorkTaskTool, trackedWork } from "./tool-surfaces/work-task.js";
 import { createProjectConsoleRouter } from "./project-console-router.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
@@ -688,7 +689,7 @@ function registerMcpSurface(
   );
 
   registerWorkspaceContextTool({ server: registrationTarget, config, workspaces, processSessions });
-  registerWorkTaskTool({ server: registrationTarget, config, workspaces, processSessions });
+  registerWorkTaskTool({ server: config.toolMode === "web" ? webControlTarget(registrationTarget) : registrationTarget, config, workspaces, processSessions });
 
   toolSurface.register({
     server: registrationTarget,
@@ -984,9 +985,18 @@ export function createServer(
         }
         await toolActivities.waitForIdle();
         processSessions.shutdown();
-        projectConsole.close();
-        oauthProvider.close();
-        workspaceStore.close?.();
+        try {
+          await processSessions.waitForBackground();
+        } catch (error) {
+          logEvent(config.logging, "error", "background_shutdown_failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        } finally {
+          projectConsole.close();
+          oauthProvider.close();
+          workspaceStore.close?.();
+        }
       })();
       return closePromise;
     },

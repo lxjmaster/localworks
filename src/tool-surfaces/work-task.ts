@@ -56,7 +56,10 @@ export function registerWorkTaskTool({ server, config, workspaces, processSessio
           runKey: input.runKey, title: input.title, origin: hostOrigin(extra, registeredClientLabel(server), input.hostModelLabel) });
         return reply({ ...ledger.receipt(run.id), consolePath: `/console/?project=${run.project_id}&run=${run.id}` });
       }
-      if (input.action === "list") return reply(ledger.listRuns(ledger.project(workspace.root).id));
+      if (input.action === "list") {
+        const project = ledger.findProject(workspace.root);
+        return reply(project ? ledger.listRuns(project.id) : []);
+      }
       if (!input.workRunId) throw new Error("workRunId is required.");
       const run = ledger.requireScope(input.workRunId, workspace.root, workspace.id);
       const views = new WorkRunViews(ledger);

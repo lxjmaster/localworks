@@ -17,6 +17,7 @@ export interface ServerConfig {
   allowedHosts: string[];
   publicBaseUrl: string;
   toolMode: ToolMode;
+  webExecution?: { allowedDomains: string[]; environment: string[]; readRoots?: string[]; allowLocalBinding?: boolean };
   uiEnabled: boolean;
   stateDir: string;
   worktreeRoot: string;
@@ -67,6 +68,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     allowedHosts: normalizeAllowedHosts(derivedAllowedHosts),
     publicBaseUrl,
     toolMode: stored.tools.mode,
+    webExecution: { ...stored.tools.webExecution, readRoots: stored.tools.webExecution.readRoots.map(normalizePath) },
     uiEnabled: stored.ui.enabled,
     console: stored.console,
     stateDir: normalizePath(stored.storage.stateDir),

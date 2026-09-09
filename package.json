@@ -4,11 +4,11 @@
   "private": true,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wrfgup/taskquay.git"
+    "url": "git+https://github.com/lxjmaster/localworks.git"
   },
-  "homepage": "https://github.com/wrfgup/taskquay#readme",
+  "homepage": "https://github.com/lxjmaster/localworks#readme",
   "bugs": {
-    "url": "https://github.com/wrfgup/taskquay/issues"
+    "url": "https://github.com/lxjmaster/localworks/issues"
   },
   "description": "Expose a secure local coding workspace through an MCP server.",
   "type": "module",
